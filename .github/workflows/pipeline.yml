@@ -2,14 +2,15 @@ name: Immersive Worlds Automation
 
 on:
   schedule:
-    - cron: "0 18 * * 1,3,5"   # UTC → haftada 3
-    - cron: "0 9 * * *"   # 09:00 UTC (Shorts 1)
-    - cron: "0 19 * * *"  # 19:00 UTC (Shorts 2)
-
+    - cron: "0 18 * * 1,3,5"  # Long videos: Mon/Wed/Fri 18:00 UTC
+    - cron: "0 9 * * *"       # Shorts #1: daily 09:00 UTC
+    - cron: "0 19 * * *"      # Shorts #2: daily 19:00 UTC
   workflow_dispatch:
 
 jobs:
-  run:
+  long:
+    # Only run on the long-video schedule OR manual dispatch
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 18 * * 1,3,5' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -29,7 +30,7 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run pipeline
+      - name: Run long pipeline (public upload)
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
@@ -37,3 +38,44 @@ jobs:
           YT_DEFAULT_PRIVACY: ${{ secrets.YT_DEFAULT_PRIVACY }}
         run: |
           python -m src.run_pipeline
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf out || true
+
+  shorts:
+    # Only run on the shorts schedules OR manual dispatch
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * *' || github.event.schedule == '0 19 * * *' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng libsndfile1
+
+      - name: Install Python deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run shorts pipeline (public upload)
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_DEFAULT_PRIVACY: ${{ secrets.YT_DEFAULT_PRIVACY }}
+        run: |
+          python -m src.shorts_pipeline
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf out || true
