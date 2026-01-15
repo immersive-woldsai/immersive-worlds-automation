@@ -1,7 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
-from youtube_upload import upload_video
+from src.youtube_upload import upload_video
 
 OUT_DIR = Path("out")
 OUT_DIR.mkdir(exist_ok=True)
