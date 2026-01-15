@@ -3,6 +3,9 @@ name: Immersive Worlds Automation
 on:
   schedule:
     - cron: "0 18 * * 1,3,5"   # UTC → haftada 3
+    - cron: "0 9 * * *"   # 09:00 UTC (Shorts 1)
+    - cron: "0 19 * * *"  # 19:00 UTC (Shorts 2)
+
   workflow_dispatch:
 
 jobs:
