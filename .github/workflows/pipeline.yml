@@ -10,7 +10,7 @@ on:
 jobs:
   build-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
 
     steps:
       - name: Checkout
@@ -21,10 +21,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install FFmpeg
+      - name: Install system deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+         sudo apt-get update
+         sudo apt-get install -y ffmpeg espeak-ng libsndfile1
+
 
       - name: Install Python deps
         run: |
