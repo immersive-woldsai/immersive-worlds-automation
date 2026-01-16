@@ -42,18 +42,15 @@ CLOSE = [
 ]
 
 def run(cmd):
-    subprocess.run(cmd, check=True)
+    print("\n[CMD]", " ".join(cmd))
+    p = subprocess.run(cmd, text=True, capture_output=True)
+    if p.stdout:
+        print("[STDOUT]\n", p.stdout[-4000:])
+    if p.stderr:
+        print("[STDERR]\n", p.stderr[-4000:])
+    if p.returncode != 0:
+        raise RuntimeError(f"Command failed with exit code {p.returncode}")
 
-def pick_object():
-    obj = random.choice(OBJECT_POOL)
-
-    calm = {"mirror","candle","book","pillow","blanket","window","lamp","curtain"}
-    energetic = {"clock","phone","laptop","watch","camera","ticket","passport","train","subway"}
-
-    toks = set(obj.lower().split())
-    is_calm = len(toks & calm) > 0 and len(toks & energetic) == 0
-    speaker = "p225" if is_calm else "p226"
-    return obj, speaker
 
 def build_script(obj: str) -> str:
     # 25–45 saniye hedef: kısa, vurucu
