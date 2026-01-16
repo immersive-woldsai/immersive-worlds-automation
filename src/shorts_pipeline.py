@@ -42,14 +42,18 @@ def run(cmd):
 
 def pick_object():
     obj = random.choice(OBJECT_POOL)
+
     calm_keywords = {"mirror","candle","book","pillow","blanket","window","lamp","curtain"}
     energetic_keywords = {"clock","phone","laptop","alarm","watch","camera","ticket","passport","train","subway"}
+
     tokens = set(obj.lower().split())
     is_calm = len(tokens & calm_keywords) > 0 and len(tokens & energetic_keywords) == 0
+
     voice = {"speaker": "p225" if is_calm else "p226"}
     return obj, voice
 
 def build_script(obj: str) -> str:
+    # Script is intentionally short: 25–45 sec target
     return " ".join([
         random.choice(HOOKS),
         f"I’m a {obj}. And I notice patterns.",
@@ -65,14 +69,15 @@ def tts_wav(text: str, wav_path: Path, speaker: str):
 
 def duration_seconds(audio_path: Path) -> float:
     r = subprocess.run(
-        ["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1", str(audio_path)],
+        ["ffprobe","-v","error","-show_entries","format=duration",
+         "-of","default=noprint_wrappers=1:nokey=1", str(audio_path)],
         capture_output=True, text=True, check=True
     )
     return float(r.stdout.strip())
 
 def write_srt_word_by_word(text: str, total_sec: float, srt_path: Path):
     words = text.split()
-    per = max(0.16, min(0.28, total_sec / max(1, len(words))))
+    per = max(0.16, min(0.30, total_sec / max(1, len(words))))
     t = 0.0
 
     def fmt(ts):
@@ -104,47 +109,69 @@ def download(url: str, path: Path):
 
 def ensure_bg_image(obj: str, img_path: Path):
     """
-    GUARANTEE: related image from Unsplash Source (no key) -> if fails, Picsum -> if fails, hard fail.
+    GUARANTEE image:
+    - Unsplash Source (no key) -> if fails -> Picsum
     """
     q = obj.replace(" ", ",")
     urls = [
         f"https://source.unsplash.com/1080x1920/?{q}",
         "https://picsum.photos/1080/1920.jpg",
     ]
-
     last_err = None
     for u in urls:
         try:
             download(u, img_path)
             if img_path.exists() and img_path.stat().st_size > 20_000:
-                return u, img_path.stat().st_size
+                print(f"[DEBUG] BG OK: {u} size={img_path.stat().st_size}")
+                return
         except Exception as e:
             last_err = e
+    raise RuntimeError(f"Image download failed. Last error: {last_err}")
 
-    raise RuntimeError(f"Image download failed for '{obj}'. Last error: {last_err}")
+def safe_small_label(obj: str) -> str:
+    t = obj.upper().replace("'", "").replace(":", "")
+    t = re.sub(r"\s+", " ", t).strip()
+    if len(t) > 18:
+        t = t[:18].rstrip() + "…"
+    return t
 
-def make_video(img_path: Path, audio_wav: Path, srt_path: Path, out_mp4: Path):
+def make_shorts_video_9x16(obj: str, img_path: Path, audio_wav: Path, srt_path: Path, out_mp4: Path):
     """
-    İSTEDİĞİN TASARIM:
-    - Ortadaki büyük yazı YOK
-    - Küçük etiket (TALKING OBJECT · ...) ortanın altına
-    - Altyazı çok küçük ve alt-orta
+    ✅ Shorts guarantee:
+    - 1080x1920 output
+    - <= 60 sec (script already short; we also hard-cap to 58s)
+    - Has #shorts in metadata
+    Layout:
+    - NO big center title
+    - small label around lower-middle
+    - subtitles tiny bottom-center
     """
+    label = safe_small_label(obj)
+
     vf = (
-        "scale=1080:-1,"
+        # Ensure correct size then crop to EXACT 1080x1920
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,"
-        "zoompan=z='min(zoom+0.00025,1.08)':d=1,"
+        # mild zoom
+        "zoompan=z='min(zoom+0.00025,1.06)':d=1,"
+        # lower-middle strip
         "drawbox=x=0:y=1120:w=iw:h=90:color=black@0.35:t=fill,"
-        "drawtext=text='TALKING OBJECT':fontcolor=white@0.9:fontsize=22:x=(w-text_w)/2:y=1145,"
+        # tiny label lower-middle
+        f"drawtext=text='TALKING OBJECT · {label}':fontcolor=white@0.9:fontsize=22:"
+        "x=(w-text_w)/2:y=1146,"
+        # tiny subtitles
         f"subtitles={srt_path}:force_style='Fontsize=28,Alignment=2,Outline=2,Shadow=1,MarginV=85'"
     )
 
+    # Hard cap video duration to 58s just in case (Shorts must be <=60s)
     run([
         "ffmpeg","-y",
         "-loop","1","-i",str(img_path),
         "-i",str(audio_wav),
+        "-t","58",
         "-shortest",
         "-vf",vf,
+        "-r","30",
         "-c:v","libx264","-pix_fmt","yuv420p",
         "-c:a","aac","-b:a","192k",
         str(out_mp4)
@@ -168,12 +195,12 @@ def main():
 
     tts_wav(script, wav, speaker=voice["speaker"])
     dur = duration_seconds(wav)
+    print(f"[DEBUG] audio duration: {dur:.2f}s")
+
     write_srt_word_by_word(script, dur, srt)
+    ensure_bg_image(obj, img)
 
-    src_url, sz = ensure_bg_image(obj, img)
-    print(f"[DEBUG] BG source: {src_url} | size={sz} bytes")
-
-    make_video(img, wav, srt, mp4)
+    make_shorts_video_9x16(obj, img, wav, srt, mp4)
 
     title, desc, tags = make_metadata(obj)
     upload_video(
