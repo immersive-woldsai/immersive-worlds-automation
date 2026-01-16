@@ -12,12 +12,12 @@ from src.youtube_upload import upload_video
 OUT = Path("out")
 OUT.mkdir(exist_ok=True)
 
-# Sonsuz dönen nesne havuzu (istersen büyütürüz)
 OBJECT_POOL = [
     "train ticket","door","mirror","clock","coffee cup","key","book","candle","umbrella","wallet",
     "headphones","notebook","pen","shoe","backpack","water bottle","chair","window","lamp","phone",
     "laptop","staircase","streetlight","map","compass","watch","ring","pillow","blanket","curtain",
-    "toothbrush","remote control","spoon","fork","plate","camera","passport","suitcase","receipt","coin"
+    "toothbrush","remote control","spoon","fork","plate","camera","passport","suitcase","receipt","coin",
+    "gloves","scarf","jacket","bus stop","subway","elevator","stairs"
 ]
 
 HOOKS = [
@@ -49,7 +49,7 @@ def pick_object():
     obj = random.choice(OBJECT_POOL)
 
     calm_keywords = {"mirror","candle","book","pillow","blanket","window","lamp","curtain"}
-    energetic_keywords = {"clock","phone","laptop","alarm","watch","camera","ticket","passport","train"}
+    energetic_keywords = {"clock","phone","laptop","alarm","watch","camera","ticket","passport","train","subway"}
 
     tokens = set(obj.lower().split())
     is_calm = len(tokens & calm_keywords) > 0 and len(tokens & energetic_keywords) == 0
@@ -88,7 +88,6 @@ def write_srt_word_by_word(text: str, total_sec: float, srt_path: Path):
         srt_path.write_text("", encoding="utf-8")
         return
 
-    # Daha okunur ve küçük: hızlı ama göz yormayan
     per = max(0.16, min(0.28, total_sec / len(words)))
     t = 0.0
 
@@ -113,102 +112,123 @@ def write_srt_word_by_word(text: str, total_sec: float, srt_path: Path):
 
     srt_path.write_text("\n".join(out), encoding="utf-8")
 
-def safe_title(text: str) -> str:
+def safe_small_label(text: str) -> str:
     t = text.upper().replace("'", "").replace(":", "")
     t = re.sub(r"\s+", " ", t).strip()
-    # Çok uzunsa kırp
-    if len(t) > 22:
-        t = t[:22].rstrip() + "…"
+    if len(t) > 18:
+        t = t[:18].rstrip() + "…"
     return t
 
-def openverse_pick_image(query: str):
+def openverse_pick_direct_image(query: str):
     """
-    Openverse (CC) üzerinden görsel bulur.
-    API key gerekmez.
+    Openverse results:
+    - `thumbnail` is a DIRECT image URL most of the time.
+    - `url` can be a landing page and break downloading.
+    So we use `thumbnail` for reliability.
     """
     params = {
         "q": query,
         "page_size": 20,
-        "license_type": "all",
-        "size": "large",   # mümkünse büyük
+        "size": "large",
         "mature": "false"
     }
-    r = requests.get(OPENVERSE_SEARCH, params=params, timeout=20)
+    r = requests.get(OPENVERSE_SEARCH, params=params, timeout=25)
     r.raise_for_status()
     data = r.json()
     results = data.get("results", [])
     if not results:
         return None
 
-    # Rastgele bir sonuç seç
     item = random.choice(results)
 
-    img_url = item.get("url") or item.get("thumbnail")  # url genelde direct image
+    # IMPORTANT: use thumbnail for direct image
+    img_url = item.get("thumbnail")
     if not img_url:
         return None
 
-    # Attribution bilgileri
-    creator = item.get("creator") or ""
-    source = item.get("source") or ""
-    license_ = item.get("license") or ""
-    license_url = item.get("license_url") or ""
     attribution = {
-        "creator": creator,
-        "source": source,
-        "license": license_,
-        "license_url": license_url,
+        "creator": item.get("creator") or "",
+        "source": item.get("source") or "",
+        "license": item.get("license") or "",
+        "license_url": item.get("license_url") or "",
         "image_url": img_url
     }
     return attribution
 
 def download_image(url: str, out_path: Path):
-    with requests.get(url, stream=True, timeout=30) as r:
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+    with requests.get(url, stream=True, timeout=30, headers=headers, allow_redirects=True) as r:
         r.raise_for_status()
         with open(out_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
 
-def make_vertical_video_with_image(obj: str, img_path: Path, audio_wav: Path, srt_path: Path, out_mp4: Path):
+def ensure_background_image(obj: str, out_img: Path):
     """
-    Dikey 1080x1920:
-    - Arkaplan: indirilen görsel
-    - Üstte küçük başlık + ortada obje adı (küçük ve ortalı)
-    - Altyazı: küçük, alt-orta
+    Guarantee image exists:
+    1) Try Openverse thumbnail (CC ecosystem)
+    2) If fails -> use picsum.photos (always returns an image)
     """
-    obj_text = safe_title(obj)
+    attribution = None
 
-    # Yazıları küçülttük ve daha aşağıya aldık (ortalamaya yakın)
+    try:
+        attribution = openverse_pick_direct_image(obj)
+        if attribution:
+            download_image(attribution["image_url"], out_img)
+            if out_img.exists() and out_img.stat().st_size > 10_000:
+                return attribution
+    except Exception:
+        pass
+
+    # fallback that ALWAYS works (random photo). No attribution needed.
+    try:
+        url = "https://picsum.photos/1080/1920.jpg"
+        download_image(url, out_img)
+    except Exception:
+        # last fallback: generate color frame
+        run(["ffmpeg","-y","-f","lavfi","-i","color=c=#0b1020:s=1080x1920","-frames:v","1",str(out_img)])
+
+    return attribution
+
+def make_vertical_video(obj: str, img_path: Path, audio_wav: Path, srt_path: Path, out_mp4: Path):
+    """
+    Layout changes requested:
+    - Remove big center title (DONE)
+    - Move small label to lower-middle (DONE)
+    - Keep subtitles small, bottom-center (DONE)
+    """
+    label = safe_small_label(obj)
+
     vf = (
         "scale=1080:-1,"
         "crop=1080:1920,"
         "zoompan=z='min(zoom+0.00025,1.08)':d=1,"
-        # hafif üst karartma (yazı okunur olsun)
-        "drawbox=x=0:y=430:w=iw:h=300:color=black@0.35:t=fill,"
-        # küçük header
-        "drawtext=text='TALKING OBJECT':fontcolor=white@0.85:fontsize=28:x=(w-text_w)/2:y=460,"
-        # obje adı (küçük ve ortalı)
-        f"drawtext=text='{obj_text}':fontcolor=white:fontsize=44:x=(w-text_w)/2:y=515,"
-        # altyazı küçük ve alt-orta
-        f"subtitles={srt_path}:force_style='Fontsize=34,Alignment=2,Outline=2,Shadow=1,MarginV=110'"
+        # slight dark strip behind label (lower-middle)
+        "drawbox=x=0:y=1120:w=iw:h=140:color=black@0.35:t=fill,"
+        # small label lower-middle
+        f"drawtext=text='TALKING OBJECT  ·  {label}':fontcolor=white@0.9:fontsize=26:"
+        "x=(w-text_w)/2:y=1165,"
+        # subtitles: very small bottom center
+        f"subtitles={srt_path}:force_style='Fontsize=30,Alignment=2,Outline=2,Shadow=1,MarginV=90'"
     )
 
     run([
         "ffmpeg", "-y",
-        "-loop", "1", "-i", str(img_path),
-        "-i", str(audio_wav),
+        "-loop","1","-i",str(img_path),
+        "-i",str(audio_wav),
         "-shortest",
-        "-vf", vf,
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
+        "-vf",vf,
+        "-c:v","libx264","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","192k",
         str(out_mp4)
     ])
 
-def make_metadata(obj: str, script: str, attribution: dict | None):
+def make_metadata(obj: str, attribution: dict | None):
     title = f"{obj.title()} Speaks — 30s Motivation #Shorts"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    # Kısa açıklama (Shorts)
     desc_lines = [
         f"{obj.title()} speaks.",
         f"UTC: {today}",
@@ -216,11 +236,11 @@ def make_metadata(obj: str, script: str, attribution: dict | None):
         "#shorts #motivation #mindset #selfimprovement",
     ]
 
-    # Eğer CC görsel kullandıysak attribution ekle (yasal olarak iyi pratik)
-    if attribution:
+    # Optional attribution if Openverse used
+    if attribution and attribution.get("license"):
         desc_lines += [
             "",
-            "Image credit (Openverse / CC):",
+            "Image credit (Openverse):",
             f"Creator: {attribution.get('creator','')}",
             f"Source: {attribution.get('source','')}",
             f"License: {attribution.get('license','')}",
@@ -228,7 +248,7 @@ def make_metadata(obj: str, script: str, attribution: dict | None):
         if attribution.get("license_url"):
             desc_lines.append(f"License URL: {attribution['license_url']}")
 
-    tags = ["shorts", "motivation", "mindset", "self improvement", "talking objects", obj.lower()]
+    tags = ["shorts","motivation","mindset","self improvement","talking objects",obj.lower()]
     return title, "\n".join(desc_lines), tags
 
 def main():
@@ -240,37 +260,27 @@ def main():
     mp4 = OUT / "short.mp4"
     img = OUT / "bg.jpg"
 
-    # 1) TTS
+    # TTS
     tts_wav(script, wav, speaker=voice["speaker"])
     dur = duration_seconds(wav)
 
-    # 2) subtitles
+    # subtitles
     write_srt_word_by_word(script, dur, srt)
 
-    # 3) find image (Openverse)
-    attribution = openverse_pick_image(obj)
-    if attribution:
-        try:
-            download_image(attribution["image_url"], img)
-        except Exception:
-            attribution = None
+    # GUARANTEED background image
+    attribution = ensure_background_image(obj, img)
 
-    # Eğer görsel bulunamazsa: gradient arkaplan fallback
-    if not img.exists():
-        # fallback image: ffmpeg ile tek renk jpg üret
-        run(["ffmpeg","-y","-f","lavfi","-i","color=c=#0b1020:s=1080x1920","-frames:v","1",str(img)])
+    # video
+    make_vertical_video(obj, img, wav, srt, mp4)
 
-    # 4) video render
-    make_vertical_video_with_image(obj, img, wav, srt, mp4)
-
-    # 5) upload
-    title, desc, tags = make_metadata(obj, script, attribution)
+    # upload
+    title, desc, tags = make_metadata(obj, attribution)
     upload_video(
         video_file=str(mp4),
         title=title,
         description=desc,
         tags=tags,
-        privacy_status=os.getenv("YT_DEFAULT_PRIVACY", "public"),
+        privacy_status=os.getenv("YT_DEFAULT_PRIVACY","public"),
         category_id="22",
         language="en",
     )
