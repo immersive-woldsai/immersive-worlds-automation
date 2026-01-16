@@ -75,6 +75,18 @@ def main():
         chapters=timestamps,
         out_mp4=mp4
     )
+    # --- 4.5) Mux audio into video ---
+    muxed = OUT / "long_muxed.mp4"
+    run([
+        "ffmpeg","-y",
+        "-i", str(mp4),
+        "-i", str(final_audio),
+        "-c:v","copy",
+        "-c:a","aac","-b:a","192k",
+        "-shortest",
+        str(muxed)
+    ])
+    mp4 = muxed
 
     # --- 5) Metadata (title/desc/tags + timestamps) ---
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
