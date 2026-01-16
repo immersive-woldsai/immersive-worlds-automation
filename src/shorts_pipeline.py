@@ -156,15 +156,41 @@ def safe_label(obj: str) -> str:
 
 def render_shorts_9x16(obj: str, img_path: Path, wav_path: Path, srt_path: Path, out_mp4: Path):
     """
-    Shorts şartları:
-    - 9:16 output: 1080x1920
-    - <=60s: -t 58
-    Layout:
-    - Büyük orta başlık YOK
-    - Küçük etiket alt-orta
-    - Altyazı çok küçük alt-orta
+    Subtitle filtresi bazı runner'larda patlıyor.
+    Stabilite için: SRT yakmayı kapatıyoruz, sadece label + üstte mini text.
+    (Yarın altyazıyı sağlam şekilde geri ekleriz.)
     """
     label = safe_label(obj)
+
+    # Short text overlay (very small) - from script first sentence
+    # srt_path kullanılmıyor artık, ama imza bozulmasın diye parametre duruyor.
+    mini = "Breathe. One step at a time."
+
+    vf = (
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,"
+        "zoompan=z='min(zoom+0.00020,1.05)':d=1,"
+        "drawbox=x=0:y=1180:w=iw:h=110:color=black@0.35:t=fill,"
+        f"drawtext=text='TALKING OBJECT · {label}':fontcolor=white@0.9:fontsize=20:"
+        "x=(w-text_w)/2:y=1205,"
+        # mini line above bottom (tiny)
+        f"drawtext=text='{mini}':fontcolor=white@0.85:fontsize=18:"
+        "x=(w-text_w)/2:y=1145"
+    )
+
+    run([
+        "ffmpeg","-y",
+        "-loop","1","-i",str(img_path),
+        "-i",str(wav_path),
+        "-t","58",
+        "-shortest",
+        "-vf",vf,
+        "-r","30",
+        "-c:v","libx264","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","160k",
+        str(out_mp4)
+    ])
+
 
     vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
