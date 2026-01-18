@@ -150,14 +150,21 @@ def safe_label(obj: str) -> str:
     if len(t) > 20:
         t = t[:20].rstrip() + "…"
     return t
-
+    
 def render_shorts_9x16(obj: str, img_path: Path, wav_path: Path, srt_path: Path, out_mp4: Path):
     label = safe_label(obj)
+
+    # IMPORTANT:
+    # - remove zoompan (sometimes breaks short classification)
+    # - enforce exact 1080x1920 output using scale+crop only
+    # - set SAR to 1:1
+    # - force yuv420p
 
     vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,"
-        "zoompan=z='min(zoom+0.00020,1.05)':d=1,"
+        "setsar=1,"
+        "format=yuv420p,"
         "drawbox=x=0:y=1180:w=iw:h=70:color=black@0.35:t=fill,"
         f"drawtext=text='TALKING OBJECT · {label}':fontcolor=white@0.9:fontsize=18:"
         "x=(w-text_w)/2:y=1208,"
@@ -172,10 +179,15 @@ def render_shorts_9x16(obj: str, img_path: Path, wav_path: Path, srt_path: Path,
         "-shortest",
         "-vf",vf,
         "-r","30",
-        "-c:v","libx264","-pix_fmt","yuv420p",
+        "-c:v","libx264",
+        "-profile:v","high",
+        "-level","4.1",
+        "-pix_fmt","yuv420p",
+        "-movflags","+faststart",
         "-c:a","aac","-b:a","160k",
         str(out_mp4)
     ])
+
 
 def make_metadata(obj: str):
     title = f"{obj.title()} Speaks — Motivation #Shorts"
