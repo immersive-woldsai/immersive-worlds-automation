@@ -26,14 +26,18 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run long pipeline (public upload)
+      - name: Run long pipeline (debug)
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           YT_DEFAULT_PRIVACY: ${{ secrets.YT_DEFAULT_PRIVACY }}
         run: |
-          python -m src.run_pipeline
+          set -euxo pipefail
+          echo "=== COMMIT ==="
+          git rev-parse HEAD
+          echo "=== RUN ==="
+          python -u -m src.run_pipeline
 
       - name: Cleanup
         if: always()
