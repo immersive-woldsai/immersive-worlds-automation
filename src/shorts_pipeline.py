@@ -9,10 +9,11 @@ import requests
 from TTS.api import TTS
 from src.youtube_upload import upload_video
 
+print("SHORTS_PIPELINE_VERSION = 2026-01-16-FIX-1", flush=True)
+
 OUT = Path("out")
 OUT.mkdir(exist_ok=True)
 
-# (İstersen sonra 2000'e çıkarırız; stabilite için şimdilik böyle)
 OBJECT_POOL = [
     "headphones","train ticket","door","mirror","clock","coffee cup","key","book","candle","umbrella","wallet",
     "notebook","pen","shoe","backpack","water bottle","chair","window","lamp","phone","laptop",
@@ -42,18 +43,28 @@ CLOSE = [
 ]
 
 def run(cmd):
-    print("\n[CMD]", " ".join(cmd))
+    # full debug
+    print("\n[CMD]", " ".join(cmd), flush=True)
     p = subprocess.run(cmd, text=True, capture_output=True)
     if p.stdout:
-        print("[STDOUT]\n", p.stdout[-4000:])
+        print("[STDOUT]\n", p.stdout[-4000:], flush=True)
     if p.stderr:
-        print("[STDERR]\n", p.stderr[-4000:])
+        print("[STDERR]\n", p.stderr[-4000:], flush=True)
     if p.returncode != 0:
         raise RuntimeError(f"Command failed with exit code {p.returncode}")
 
+def pick_object():
+    obj = random.choice(OBJECT_POOL)
+
+    calm = {"mirror","candle","book","pillow","blanket","window","lamp","curtain"}
+    energetic = {"clock","phone","laptop","watch","camera","ticket","passport","train","subway"}
+
+    toks = set(obj.lower().split())
+    is_calm = len(toks & calm) > 0 and len(toks & energetic) == 0
+    speaker = "p225" if is_calm else "p226"
+    return obj, speaker
 
 def build_script(obj: str) -> str:
-    # 25–45 saniye hedef: kısa, vurucu
     return " ".join([
         random.choice(HOOKS),
         f"I’m a {obj}. And I notice patterns.",
@@ -80,17 +91,12 @@ def chunks(words, n):
         yield words[i:i+n]
 
 def write_srt_chunked(text: str, total_sec: float, srt_path: Path):
-    """
-    Word-by-word yerine 3 kelimelik chunk:
-    - altyazı üstte saçmalamaz
-    - daha profesyonel görünür
-    """
     words = text.split()
-    if not words:
+    parts = list(chunks(words, 3))
+    if not parts:
         srt_path.write_text("", encoding="utf-8")
         return
 
-    parts = list(chunks(words, 3))
     per = max(0.45, min(1.2, total_sec / max(1, len(parts))))
 
     def fmt(ts):
@@ -122,12 +128,6 @@ def download(url: str, path: Path):
                     f.write(chunk)
 
 def ensure_bg_image(obj: str, img_path: Path):
-    """
-    RESIM GARANTI:
-    1) Unsplash Source (no key) -> related
-    2) Picsum fallback -> random
-    Resim gelmezse FAIL (siyah video yok!)
-    """
     q = obj.replace(" ", ",")
     urls = [
         f"https://source.unsplash.com/1080x1920/?{q}",
@@ -138,7 +138,7 @@ def ensure_bg_image(obj: str, img_path: Path):
         try:
             download(u, img_path)
             if img_path.exists() and img_path.stat().st_size > 30_000:
-                print(f"[DEBUG] BG OK: {u} size={img_path.stat().st_size}")
+                print(f"[DEBUG] BG OK: {u} size={img_path.stat().st_size}", flush=True)
                 return
         except Exception as e:
             last_err = e
@@ -152,54 +152,16 @@ def safe_label(obj: str) -> str:
     return t
 
 def render_shorts_9x16(obj: str, img_path: Path, wav_path: Path, srt_path: Path, out_mp4: Path):
-    """
-    Subtitle filtresi bazı runner'larda patlıyor.
-    Stabilite için: SRT yakmayı kapatıyoruz, sadece label + üstte mini text.
-    (Yarın altyazıyı sağlam şekilde geri ekleriz.)
-    """
     label = safe_label(obj)
 
-    # Short text overlay (very small) - from script first sentence
-    # srt_path kullanılmıyor artık, ama imza bozulmasın diye parametre duruyor.
-    mini = "Breathe. One step at a time."
-
     vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,"
         "zoompan=z='min(zoom+0.00020,1.05)':d=1,"
-        "drawbox=x=0:y=1180:w=iw:h=110:color=black@0.35:t=fill,"
-        f"drawtext=text='TALKING OBJECT · {label}':fontcolor=white@0.9:fontsize=20:"
-        "x=(w-text_w)/2:y=1205,"
-        # mini line above bottom (tiny)
-        f"drawtext=text='{mini}':fontcolor=white@0.85:fontsize=18:"
-        "x=(w-text_w)/2:y=1145"
-    )
-
-    run([
-        "ffmpeg","-y",
-        "-loop","1","-i",str(img_path),
-        "-i",str(wav_path),
-        "-t","58",
-        "-shortest",
-        "-vf",vf,
-        "-r","30",
-        "-c:v","libx264","-pix_fmt","yuv420p",
-        "-c:a","aac","-b:a","160k",
-        str(out_mp4)
-    ])
-
-
-    vf = (
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,"
-        "zoompan=z='min(zoom+0.00020,1.05)':d=1,"
-        # alt-orta etiket için hafif şerit
         "drawbox=x=0:y=1180:w=iw:h=70:color=black@0.35:t=fill,"
-        # ÇOK küçük yazı + alt-ortaya alındı
-        f"drawtext=text='TALKING OBJECT · {label}':fontcolor=white@0.9:fontsize=20:"
-        "x=(w-text_w)/2:y=1205,"
-        # Altyazı küçük ve alt-orta (Alignment=2)
-        f"subtitles={srt_path}:force_style='Fontsize=26,Alignment=2,Outline=2,Shadow=1,MarginV=70'"
+        f"drawtext=text='TALKING OBJECT · {label}':fontcolor=white@0.9:fontsize=18:"
+        "x=(w-text_w)/2:y=1208,"
+        f"subtitles={srt_path}:force_style='Fontsize=24,Alignment=2,Outline=2,Shadow=1,MarginV=65'"
     )
 
     run([
@@ -233,9 +195,9 @@ def main():
 
     tts_to_wav(script, wav, speaker=speaker)
     dur = ffprobe_duration(wav)
-    print(f"[DEBUG] audio duration={dur:.2f}s")
-    write_srt_chunked(script, min(dur, 58.0), srt)
+    print(f"[DEBUG] audio duration={dur:.2f}s", flush=True)
 
+    write_srt_chunked(script, min(dur, 58.0), srt)
     ensure_bg_image(obj, img)
     render_shorts_9x16(obj, img, wav, srt, mp4)
 
