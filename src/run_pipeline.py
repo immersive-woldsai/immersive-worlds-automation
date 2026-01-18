@@ -67,26 +67,26 @@ def main():
 
     total_dur = int(round(ffprobe_duration(final_audio)))
 
-    # --- 4) Render professional long video (procedural visuals + chapter cards) ---
-    mp4 = OUT / "long.mp4"
-    render_long_video(
-        total_seconds=total_dur,
-        title=story["title"],
-        chapters=timestamps,
-        out_mp4=mp4
-    )
-    # --- 4.5) Mux audio into video ---
-    muxed = OUT / "long_muxed.mp4"
-    run([
-        "ffmpeg","-y",
-        "-i", str(mp4),
-        "-i", str(final_audio),
-        "-c:v","copy",
-        "-c:a","aac","-b:a","192k",
-        "-shortest",
-        str(muxed)
-    ])
-    mp4 = muxed
+# --- 4) Render professional long video (background image + slow zoom) + mux audio inside ---
+mp4 = OUT / "long.mp4"
+
+# background image path: sende hangi dosyaya kaydediliyorsa onu kullan
+# Çoğu pipeline'da bu OUT/"bg.jpg" veya OUT/"bg_long.jpg" olur.
+bg_img = OUT / "bg_long.jpg"
+if not bg_img.exists():
+    bg_img = OUT / "bg.jpg"
+if not bg_img.exists():
+    bg_img = OUT / "bg.png"
+
+render_long_video(
+    total_seconds=total_dur,
+    title=story["title"],
+    chapters=timestamps,
+    bg_img=bg_img,
+    audio_wav=final_audio,
+    out_mp4=mp4
+)
+
 
     # --- 5) Metadata (title/desc/tags + timestamps) ---
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
