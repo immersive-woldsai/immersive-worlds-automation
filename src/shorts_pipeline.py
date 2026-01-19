@@ -215,57 +215,33 @@ def _make_fallback_image(obj: str, img_path: Path):
 
 
 def ensure_bg_image(obj: str, img_path: Path):
-    """
-    Önce ilgili görseli indir (Unsplash source).
-    503/timeout vs olursa retry eder.
-    Hala olmazsa fallback görsel üretir -> pipeline PATLAMAZ.
-    """
     obj_key = obj.lower().strip()
     queries = QUERY_MAP.get(obj_key, [])
-
     if not queries:
         queries = [
             obj_key,
             f"{obj_key} close up",
             f"{obj_key} in hand",
             f"{obj_key} on table",
-            f"{obj_key} minimal",
+            f"{obj_key} photo",
         ]
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    def try_download(url: str) -> bool:
-        try:
-            with requests.get(url, stream=True, timeout=35, headers=headers, allow_redirects=True) as r:
-                if r.status_code >= 500:
-                    return False
-                r.raise_for_status()
-                with open(img_path, "wb") as f:
-                    for chunk in r.iter_content(8192):
-                        if chunk:
-                            f.write(chunk)
-            return img_path.exists() and img_path.stat().st_size > 40_000
-        except Exception:
-            return False
-
-    # Retry/backoff: toplam 3 tur
-    for attempt in range(1, 4):
-        for q in queries[:6]:
-            q2 = q.replace(" ", ",")
-            url = f"https://source.unsplash.com/1080x1920/?{q2}"
-
-            ok = try_download(url)
-            if ok:
+    last_err = None
+    for q in queries[:6]:
+        q2 = q.replace(" ", ",")
+        url = f"https://source.unsplash.com/1080x1920/?{q2}"
+        for attempt in range(1, 4):  # aynı query için 3 deneme
+            try:
+                if img_path.exists():
+                    img_path.unlink()
+                download(url, img_path)
                 print(f"[DEBUG] BG OK (unsplash): {q} | size={img_path.stat().st_size}", flush=True)
                 return
+            except Exception as e:
+                last_err = e
+                print(f"[WARN] BG fetch failed ({q}) attempt={attempt}: {e}", flush=True)
 
-        sleep_s = 2 ** attempt  # 2,4,8
-        print(f"[WARN] Unsplash failed (attempt {attempt}/3). Sleeping {sleep_s}s...", flush=True)
-        time.sleep(sleep_s)
-
-    # Buraya geldiysek: internet/provider sorunlu -> fallback üret
-    print("[WARN] No image downloaded. Using generated fallback background.", flush=True)
-    _make_fallback_image(obj, img_path)
+    raise RuntimeError(f"No valid image found for '{obj}'. Last error: {last_err}")
 
 
 def safe_label(obj: str) -> str:
@@ -297,7 +273,7 @@ def render_shorts_9x16(obj: str, img_path: Path, wav_path: Path, srt_path: Path,
 
     run([
         "ffmpeg","-y",
-        "-loop","1","-i",str(img_path),
+        "-loop","1","-framerate","30","-i",str(img_path),
         "-i",str(wav_path),
         "-t","58",
         "-shortest",
