@@ -141,15 +141,16 @@ def main():
     )
 
     # --- 6) Upload ---
-    upload_video(
-        video_file=str(mp4),
-        title=story["title"],
-        description=description,
-        tags=story["tags"],
-        privacy_status=privacy,
-        category_id="22",
-        language="en",
-    )
+upload_video(
+    video_file=str(mp4),
+    title=story["title"],
+    description=description,
+    tags=story["tags"],
+    privacy_status=privacy,
+    category_id="22",
+    language="en",
+    thumbnail_file=str(OUT / "thumb.jpg"),
+)
 
     # --- 7) Cleanup (free tier safe) ---
     cleanup_out()
