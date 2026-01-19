@@ -3,32 +3,45 @@ from pathlib import Path
 
 def run(cmd):
     print("\n[CMD]", " ".join(map(str, cmd)), flush=True)
-    subprocess.run(cmd, check=True)
+    p = subprocess.run(cmd, text=True, capture_output=True)
+    if p.stdout:
+        print("[STDOUT]\n", p.stdout[-4000:], flush=True)
+    if p.stderr:
+        print("[STDERR]\n", p.stderr[-4000:], flush=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"Command failed with exit code {p.returncode}")
+
+def _escape_drawtext(s: str) -> str:
+    # ffmpeg drawtext escaping (basic)
+    return (
+        s.replace("\\", "\\\\")
+         .replace(":", "\\:")
+         .replace("'", "")
+         .replace('"', "")
+    )
 
 def render_long_video(
     total_seconds: int,
     title: str,
     chapters,
-    bg_img: Path,        # <-- NEW: background image path (jpg/png)
-    audio_wav: Path,     # <-- NEW: final audio wav path
+    bg_img: Path,        # required
+    audio_wav: Path,     # required
     out_mp4: Path
 ):
     """
-    Profesyonel long video:
-    - Background image + Ken Burns (slow zoom/pan)
-    - Soft dark overlay for readability
-    - Title small on top
-    - Audio mux inside this function (final mp4 ready for upload)
+    Long video render:
+    - background image + slow Ken Burns zoom
+    - soft dark overlay
+    - small title text
+    - audio muxed in same command (final mp4 ready)
     """
+    safe_title = _escape_drawtext(title)
 
-    safe_title = title.replace("'", "").replace('"', "").replace(":", "")
-
-    # Ken Burns: very slow zoom to avoid "static" look
     vf = (
         "scale=1280:720:force_original_aspect_ratio=increase,"
         "crop=1280:720,"
         "setsar=1,"
-        # Slow zoom/pan. fps=30, d=1 because we already output per-frame.
+        # slow zoom/pan
         "zoompan=z='min(zoom+0.00008,1.12)':"
         "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
         "d=1:s=1280x720:fps=30,"
@@ -39,11 +52,10 @@ def render_long_video(
         f"drawtext=text='{safe_title}':fontcolor=white@0.90:fontsize=44:x=(w-text_w)/2:y=130"
     )
 
-    # Build final mp4 with audio muxed in one command (stable)
     run([
         "ffmpeg","-y",
-        "-loop","1","-i", str(bg_img),     # <-- use real image
-        "-i", str(audio_wav),              # <-- mux audio here
+        "-loop","1","-i", str(bg_img),
+        "-i", str(audio_wav),
         "-t", str(total_seconds),
         "-vf", vf,
         "-r","30",
