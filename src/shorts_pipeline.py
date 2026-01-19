@@ -146,14 +146,34 @@ def write_srt_chunked(text: str, total_sec: float, srt_path: Path):
 
     srt_path.write_text("\n".join(out), encoding="utf-8")
 
+def is_valid_image(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size < 10_000:
+        return False
+    try:
+        with Image.open(path) as im:
+            im.verify()  # dosya gerçekten image mi
+        return True
+    except Exception:
+        return False
+
 def download(url: str, path: Path):
     headers = {"User-Agent": "Mozilla/5.0"}
     with requests.get(url, stream=True, timeout=35, headers=headers, allow_redirects=True) as r:
         r.raise_for_status()
+
+        ctype = (r.headers.get("content-type") or "").lower()
+        if "image" not in ctype:
+            raise RuntimeError(f"Not an image response. content-type={ctype} url={url}")
+
         with open(path, "wb") as f:
             for chunk in r.iter_content(8192):
                 if chunk:
                     f.write(chunk)
+
+    if not is_valid_image(path):
+        # Bazen HTML sayfası büyük geliyor; bunu yakalıyoruz
+        raise RuntimeError(f"Downloaded file is not a valid image: {path} size={path.stat().st_size}")
+
 
 
 def _make_fallback_image(obj: str, img_path: Path):
