@@ -156,44 +156,97 @@ def download(url: str, path: Path):
                     f.write(chunk)
 
 
+def _make_fallback_image(obj: str, img_path: Path):
+    """
+    İnternet yoksa / provider patlarsa bile 1080x1920 görsel üretir.
+    Böylece pipeline asla fail olmaz.
+    """
+    W, H = 1080, 1920
+    img = Image.new("RGB", (W, H), (6, 8, 15))
+    draw = ImageDraw.Draw(img)
+
+    # Basit gradient
+    for y in range(H):
+        v = int(10 + (y / H) * 30)
+        draw.line([(0, y), (W, y)], fill=(v, v, v))
+
+    # Yazılar
+    title = f"{obj}".upper()
+    subtitle = "TALKING OBJECT"
+
+    # Font: PIL default (her ortamda garanti)
+    font_big = ImageFont.load_default()
+    font_small = ImageFont.load_default()
+
+    # Orta-alt yerleşim (senin istediğin gibi)
+    # Büyük obj ismi daha küçük olsun:
+    # (default font küçük kalır; ama en azından taşma yapmaz)
+    tw = draw.textlength(title, font=font_big)
+    sw = draw.textlength(subtitle, font=font_small)
+
+    y_sub = int(H * 0.68)
+    y_title = int(H * 0.73)
+
+    draw.text(((W - sw) / 2, y_sub), subtitle, fill=(220, 220, 220), font=font_small)
+    draw.text(((W - tw) / 2, y_title), title, fill=(255, 255, 255), font=font_big)
+
+    img.save(img_path, quality=92)
+    print(f"[DEBUG] Fallback image generated: {img_path}", flush=True)
+
+
 def ensure_bg_image(obj: str, img_path: Path):
     """
-    RESIM ALAKALI OLACAK:
-    - Random fallback (picsum) YOK
-    - Obj -> query map ile 4-6 ilgili sorgu dener
-    - Hepsi fail olursa video YUKLENMEZ (fail) -> alakasiz gorsel cikmaz
+    Önce ilgili görseli indir (Unsplash source).
+    503/timeout vs olursa retry eder.
+    Hala olmazsa fallback görsel üretir -> pipeline PATLAMAZ.
     """
-
     obj_key = obj.lower().strip()
     queries = QUERY_MAP.get(obj_key, [])
 
-    # Eğer map'te yoksa obj'den türet:
     if not queries:
-        # basit türetme: obj + context
         queries = [
             obj_key,
             f"{obj_key} close up",
             f"{obj_key} in hand",
             f"{obj_key} on table",
-            f"{obj_key} at night",
+            f"{obj_key} minimal",
         ]
 
-    # Unsplash Source no-key endpoint (related image)
-    # Birden fazla query deniyoruz
-    last_err = None
-    for q in queries[:6]:
-        q2 = q.replace(" ", ",")
-        url = f"https://source.unsplash.com/1080x1920/?{q2}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    def try_download(url: str) -> bool:
         try:
-            download(url, img_path)
-            if img_path.exists() and img_path.stat().st_size > 40_000:
+            with requests.get(url, stream=True, timeout=35, headers=headers, allow_redirects=True) as r:
+                if r.status_code >= 500:
+                    return False
+                r.raise_for_status()
+                with open(img_path, "wb") as f:
+                    for chunk in r.iter_content(8192):
+                        if chunk:
+                            f.write(chunk)
+            return img_path.exists() and img_path.stat().st_size > 40_000
+        except Exception:
+            return False
+
+    # Retry/backoff: toplam 3 tur
+    for attempt in range(1, 4):
+        for q in queries[:6]:
+            q2 = q.replace(" ", ",")
+            url = f"https://source.unsplash.com/1080x1920/?{q2}"
+
+            ok = try_download(url)
+            if ok:
                 print(f"[DEBUG] BG OK (unsplash): {q} | size={img_path.stat().st_size}", flush=True)
                 return
-        except Exception as e:
-            last_err = e
 
-    # Buraya geldiysek: görsel bulamadık => upload yapma
-    raise RuntimeError(f"No relevant image found for '{obj}'. Last error: {last_err}")
+        sleep_s = 2 ** attempt  # 2,4,8
+        print(f"[WARN] Unsplash failed (attempt {attempt}/3). Sleeping {sleep_s}s...", flush=True)
+        time.sleep(sleep_s)
+
+    # Buraya geldiysek: internet/provider sorunlu -> fallback üret
+    print("[WARN] No image downloaded. Using generated fallback background.", flush=True)
+    _make_fallback_image(obj, img_path)
+
 
 def safe_label(obj: str) -> str:
     t = obj.upper().replace("'", "").replace(":", "")
