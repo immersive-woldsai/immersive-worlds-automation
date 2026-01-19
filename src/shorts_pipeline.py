@@ -4,6 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
+import time
+from PIL import Image, ImageDraw, ImageFont
 
 import requests
 from TTS.api import TTS
