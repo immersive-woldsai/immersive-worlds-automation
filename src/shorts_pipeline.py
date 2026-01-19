@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import time
 from PIL import Image, ImageDraw, ImageFont
+import urllib.parse
 
 import requests
 from TTS.api import TTS
@@ -213,6 +214,40 @@ def _make_fallback_image(obj: str, img_path: Path):
     img.save(img_path, quality=92)
     print(f"[DEBUG] Fallback image generated: {img_path}", flush=True)
 
+def wikimedia_image_url(query: str) -> str | None:
+    """
+    Wikimedia Commons'dan query ile uygun bir foto (thumbnail) url döndürür.
+    Key yok. Stabil.
+    """
+    q = query.strip()
+    params = {
+        "action": "query",
+        "format": "json",
+        "generator": "search",
+        "gsrsearch": q,
+        "gsrlimit": "8",
+        "gsrnamespace": "6",  # File:
+        "prop": "imageinfo",
+        "iiprop": "url",
+        "iiurlwidth": "1080",
+        "iiurlheight": "1920",
+    }
+    url = "https://commons.wikimedia.org/w/api.php?" + urllib.parse.urlencode(params)
+    r = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    data = r.json()
+
+    pages = (data.get("query") or {}).get("pages") or {}
+    for _, p in pages.items():
+        ii = (p.get("imageinfo") or [])
+        if not ii:
+            continue
+        # thumburl varsa onu al (boyutlandırılmış)
+        thumb = ii[0].get("thumburl") or ii[0].get("url")
+        if thumb:
+            return thumb
+    return None
+
 
 def ensure_bg_image(obj: str, img_path: Path):
     obj_key = obj.lower().strip()
@@ -227,10 +262,12 @@ def ensure_bg_image(obj: str, img_path: Path):
         ]
 
     last_err = None
+
+    # --- A) Unsplash dene (hızlı, ama bazen 503) ---
     for q in queries[:6]:
         q2 = q.replace(" ", ",")
         url = f"https://source.unsplash.com/1080x1920/?{q2}"
-        for attempt in range(1, 4):  # aynı query için 3 deneme
+        for attempt in range(1, 4):
             try:
                 if img_path.exists():
                     img_path.unlink()
@@ -239,10 +276,26 @@ def ensure_bg_image(obj: str, img_path: Path):
                 return
             except Exception as e:
                 last_err = e
-                print(f"[WARN] BG fetch failed ({q}) attempt={attempt}: {e}", flush=True)
+                wait = 1.5 * attempt
+                print(f"[WARN] Unsplash failed ({q}) attempt={attempt}: {e} | sleep={wait}s", flush=True)
+                time.sleep(wait)
+
+    # --- B) Wikimedia fallback (key yok, stabil) ---
+    for q in queries[:8]:
+        try:
+            img_url = wikimedia_image_url(q)
+            if not img_url:
+                continue
+            if img_path.exists():
+                img_path.unlink()
+            download(img_url, img_path)
+            print(f"[DEBUG] BG OK (wikimedia): {q} | url={img_url} | size={img_path.stat().st_size}", flush=True)
+            return
+        except Exception as e:
+            last_err = e
+            print(f"[WARN] Wikimedia failed ({q}): {e}", flush=True)
 
     raise RuntimeError(f"No valid image found for '{obj}'. Last error: {last_err}")
-
 
 def safe_label(obj: str) -> str:
     t = obj.upper().replace("'", "").replace(":", "")
