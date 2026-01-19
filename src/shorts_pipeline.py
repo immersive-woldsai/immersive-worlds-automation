@@ -21,6 +21,32 @@ OBJECT_POOL = [
     "toothbrush","remote control","spoon","fork","plate","camera","passport","suitcase","receipt","coin",
     "gloves","scarf","jacket","bus stop","subway","elevator","stairs"
 ]
+QUERY_MAP = {
+    "train ticket": ["train station", "train travel", "railway", "commuter train"],
+    "door": ["doorway", "hallway door", "wooden door", "home entrance"],
+    "mirror": ["mirror reflection", "reflection", "mirror room"],
+    "clock": ["clock", "watch", "timepiece", "alarm clock"],
+    "coffee cup": ["coffee mug", "coffee cup", "cafe coffee", "coffee table"],
+    "key": ["house key", "door key", "key in hand"],
+    "book": ["book reading", "open book", "library books"],
+    "candle": ["candle flame", "candle light", "soft candle"],
+    "umbrella": ["umbrella rain", "rain street umbrella"],
+    "wallet": ["wallet", "money wallet", "card wallet"],
+    "headphones": ["headphones", "music headphones", "headphones on desk"],
+    "notebook": ["notebook writing", "journal", "paper notebook"],
+    "pen": ["pen writing", "fountain pen", "pen on paper"],
+    "shoe": ["shoe", "sneakers", "running shoes"],
+    "backpack": ["backpack", "travel backpack", "school backpack"],
+    "window": ["window night", "window rain", "window light"],
+    "lamp": ["desk lamp", "lamp light", "bedside lamp"],
+    "phone": ["smartphone", "phone screen", "phone in hand"],
+    "laptop": ["laptop", "laptop desk", "computer laptop"],
+    "subway": ["subway station", "metro train", "underground station"],
+    "bus stop": ["bus stop", "street bus stop", "public transport stop"],
+    "stairs": ["stairs", "staircase", "stairway"],
+    "elevator": ["elevator", "elevator doors", "building elevator"],
+}
+
 
 HOOKS = [
     "Stop scrolling for 10 seconds.",
@@ -120,29 +146,52 @@ def write_srt_chunked(text: str, total_sec: float, srt_path: Path):
 
 def download(url: str, path: Path):
     headers = {"User-Agent": "Mozilla/5.0"}
-    with requests.get(url, stream=True, timeout=30, headers=headers, allow_redirects=True) as r:
+    with requests.get(url, stream=True, timeout=35, headers=headers, allow_redirects=True) as r:
         r.raise_for_status()
         with open(path, "wb") as f:
             for chunk in r.iter_content(8192):
                 if chunk:
                     f.write(chunk)
 
+
 def ensure_bg_image(obj: str, img_path: Path):
-    q = obj.replace(" ", ",")
-    urls = [
-        f"https://source.unsplash.com/1080x1920/?{q}",
-        "https://picsum.photos/1080/1920.jpg",
-    ]
+    """
+    RESIM ALAKALI OLACAK:
+    - Random fallback (picsum) YOK
+    - Obj -> query map ile 4-6 ilgili sorgu dener
+    - Hepsi fail olursa video YUKLENMEZ (fail) -> alakasiz gorsel cikmaz
+    """
+
+    obj_key = obj.lower().strip()
+    queries = QUERY_MAP.get(obj_key, [])
+
+    # Eğer map'te yoksa obj'den türet:
+    if not queries:
+        # basit türetme: obj + context
+        queries = [
+            obj_key,
+            f"{obj_key} close up",
+            f"{obj_key} in hand",
+            f"{obj_key} on table",
+            f"{obj_key} at night",
+        ]
+
+    # Unsplash Source no-key endpoint (related image)
+    # Birden fazla query deniyoruz
     last_err = None
-    for u in urls:
+    for q in queries[:6]:
+        q2 = q.replace(" ", ",")
+        url = f"https://source.unsplash.com/1080x1920/?{q2}"
         try:
-            download(u, img_path)
-            if img_path.exists() and img_path.stat().st_size > 30_000:
-                print(f"[DEBUG] BG OK: {u} size={img_path.stat().st_size}", flush=True)
+            download(url, img_path)
+            if img_path.exists() and img_path.stat().st_size > 40_000:
+                print(f"[DEBUG] BG OK (unsplash): {q} | size={img_path.stat().st_size}", flush=True)
                 return
         except Exception as e:
             last_err = e
-    raise RuntimeError(f"BG image download failed. Last error: {last_err}")
+
+    # Buraya geldiysek: görsel bulamadık => upload yapma
+    raise RuntimeError(f"No relevant image found for '{obj}'. Last error: {last_err}")
 
 def safe_label(obj: str) -> str:
     t = obj.upper().replace("'", "").replace(":", "")
@@ -150,7 +199,7 @@ def safe_label(obj: str) -> str:
     if len(t) > 20:
         t = t[:20].rstrip() + "…"
     return t
-    
+  
 def render_shorts_9x16(obj: str, img_path: Path, wav_path: Path, srt_path: Path, out_mp4: Path):
     label = safe_label(obj)
 
