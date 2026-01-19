@@ -7,6 +7,7 @@ from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
+
 def _get_creds() -> Credentials:
     return Credentials(
         None,
@@ -17,6 +18,25 @@ def _get_creds() -> Credentials:
         scopes=SCOPES,
     )
 
+
+def _bool_env(name: str, default: str = "false") -> bool:
+    v = os.getenv(name, default).strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
+
+
+def set_thumbnail(youtube, video_id: str, thumbnail_file: str) -> None:
+    """
+    Sets video thumbnail. This does NOT require a different scope than upload in most cases.
+    If it fails, we log and continue.
+    """
+    request = youtube.thumbnails().set(
+        videoId=video_id,
+        media_body=MediaFileUpload(thumbnail_file),
+    )
+    request.execute()
+    print("[OK] Thumbnail set:", thumbnail_file)
+
+
 def upload_video(
     video_file: str,
     title: str,
@@ -25,9 +45,12 @@ def upload_video(
     privacy_status: str = "unlisted",
     category_id: str = "22",
     language: str = "en",
+    thumbnail_file: Optional[str] = None,  # <-- NEW (optional)
 ) -> str:
     creds = _get_creds()
     youtube = build("youtube", "v3", credentials=creds)
+
+    notify_subscribers = _bool_env("YT_NOTIFY_SUBSCRIBERS", "false")
 
     body = {
         "snippet": {
@@ -44,16 +67,13 @@ def upload_video(
         },
     }
 
-    media = MediaFileUpload(
-        video_file,
-        mimetype="video/mp4",
-        resumable=True
-    )
+    media = MediaFileUpload(video_file, mimetype="video/mp4", resumable=True)
 
     request = youtube.videos().insert(
         part="snippet,status",
         body=body,
         media_body=media,
+        notifySubscribers=notify_subscribers,
     )
 
     response = None
@@ -62,5 +82,17 @@ def upload_video(
         if status:
             print(f"Upload progress: {int(status.progress() * 100)}%")
 
-    print("Uploaded video id:", response["id"])
-    return response["id"]
+    video_id = response["id"]
+    print("Uploaded video id:", video_id)
+
+    # Thumbnail (optional)
+    if thumbnail_file:
+        try:
+            if os.path.exists(thumbnail_file):
+                set_thumbnail(youtube, video_id, thumbnail_file)
+            else:
+                print("[WARN] Thumbnail file not found:", thumbnail_file)
+        except Exception as e:
+            print("[WARN] Thumbnail set failed:", e)
+
+    return video_id
