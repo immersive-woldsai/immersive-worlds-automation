@@ -2,8 +2,8 @@ name: Immersive Worlds — Shorts (2/day)
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # daily 09:00 UTC
-    - cron: "0 19 * * *"  # daily 19:00 UTC
+    - cron: "0 20 * * *"   # daily 20:00 UTC
+    - cron: "0 22 * * *"  # daily 22:00 UTC
   workflow_dispatch:
 
 jobs:
