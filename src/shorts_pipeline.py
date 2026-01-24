@@ -3,6 +3,7 @@ import random
 import re
 import subprocess
 from pathlib import Path
+import shutil
 from datetime import datetime, timezone
 import time
 import json
@@ -260,19 +261,22 @@ def ensure_bg_image_free(queries: List[str], img_path: Path):
                 img_path.unlink()
             download(img_url, img_path)
             print(f"[OK] BG (wikimedia): {q}", flush=True)
-            return
+            return img_path   # <-- IMPORTANT: return inside function
         except Exception as e:
             last_err = e
             print(f"[WARN] Wikimedia failed ({q}): {e}", flush=True)
 
     print("[WARN] No image found online, using local fallback.", flush=True)
 
-fallback = Path("assets/fallback.jpg")
-if fallback.exists():
-    shutil.copy(fallback, img_path)
-    return img_path
+    fallback = Path("assets/fallback.jpg")   # <-- MUST be indented (inside function)
+    if fallback.exists():
+        img_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(fallback, img_path)
+        return img_path
 
-raise RuntimeError(f"No valid image found and no fallback image present. Last error: {last_err}")
+    raise RuntimeError(
+        f"No valid image found and no fallback image present. Last error: {last_err}"
+    )
 
 
 
