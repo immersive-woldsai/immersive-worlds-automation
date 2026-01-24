@@ -130,47 +130,100 @@ def download_bg_from_pexels(out_path: Path) -> Path:
     key = os.environ["PEXELS_API_KEY"]
     headers = {"Authorization": key}
 
-    q = random.choice(PEXELS_QUERIES)
-    r = requests.get(
-        PEXELS_API,
-        headers=headers,
-        params={"query": q, "orientation": "portrait", "per_page": 30},
-        timeout=30,
-    )
-    r.raise_for_status()
-    videos = r.json().get("videos", [])
-    if not videos:
-        raise RuntimeError("Pexels returned no videos")
+    # Daha stabil olsun diye 6 deneme
+    for attempt in range(1, 7):
+        q = random.choice(PEXELS_QUERIES)
+        print(f"[BG] Search attempt {attempt} query='{q}'", flush=True)
 
-    v = random.choice(videos)
-    files = v.get("video_files", [])
-    if not files:
-        raise RuntimeError("Pexels video has no files")
+        r = requests.get(
+            PEXELS_API,
+            headers=headers,
+            params={"query": q, "orientation": "portrait", "per_page": 40},
+            timeout=30,
+        )
+        r.raise_for_status()
+        videos = r.json().get("videos", [])
+        if not videos:
+            continue
 
-    # Prefer portrait + smaller size (faster)
-    cand = [f for f in files if f.get("width") and f.get("height") and f["height"] > f["width"]]
-    if not cand:
-        cand = files
+        random.shuffle(videos)
 
-    # pick smallest file to keep pipeline fast
-    cand.sort(key=lambda x: (x.get("file_size") or 10**18))
-    chosen = cand[0]
-    url = chosen["link"]
+        # Her attempt'te birkaç videoyu dene
+        for v in videos[:8]:
+            files = v.get("video_files", [])
+            if not files:
+                continue
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[BG] Pexels query='{q}' -> {out_path}", flush=True)
+            # Portrait + en iyi "orta" kaliteyi seç:
+            # çok küçük (preview) istemiyoruz, çok büyük de istemiyoruz
+            cand = []
+            for f in files:
+                w = f.get("width") or 0
+                h = f.get("height") or 0
+                size = f.get("file_size") or 0
+                link = f.get("link")
+                if not link:
+                    continue
+                # portrait filtre
+                if h > w and h >= 720:
+                    cand.append((abs((w / h) - (9 / 16)), size, link, w, h))
 
-    with requests.get(url, stream=True, timeout=120) as rr:
-        rr.raise_for_status()
-        with open(out_path, "wb") as f:
-            for chunk in rr.iter_content(1024 * 1024):
-                if chunk:
-                    f.write(chunk)
+            if not cand:
+                continue
 
-    if not out_path.exists() or out_path.stat().st_size < 300_000:
-        raise RuntimeError("Downloaded bg video too small/invalid")
+            # En iyi aspect ratio yakın olanlardan size'a göre sırala (orta boy hedef)
+            # file_size bazen yok olur; o yüzden 2. sıralama olarak çözünürlüğü kullanıyoruz
+            cand.sort(key=lambda x: (x[0], 0 if x[1] == 0 else abs(x[1] - 8_000_000)))  # ~8MB hedef
 
-    return out_path
+            # En iyi 3 aday linki dene
+            for _, _, url, w, h in cand[:3]:
+                try:
+                    print(f"[BG] Trying file {w}x{h} url=({url[:60]}...)", flush=True)
+
+                    # indir
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    if out_path.exists():
+                        out_path.unlink()
+
+                    with requests.get(url, stream=True, timeout=180) as rr:
+                        rr.raise_for_status()
+                        with open(out_path, "wb") as f:
+                            for chunk in rr.iter_content(1024 * 1024):
+                                if chunk:
+                                    f.write(chunk)
+
+                    # valid mi?
+                    if not out_path.exists():
+                        continue
+                    size = out_path.stat().st_size
+
+                    # Çok küçükse reject (preview/bozuk)
+                    if size < 2_000_000:  # 2MB altı istemiyoruz
+                        print(f"[WARN] BG too small ({size} bytes). Retrying...", flush=True)
+                        continue
+
+                    # ffprobe ile gerçekten video mu kontrol et
+                    try:
+                        dur = ffprobe_duration(out_path)
+                        if dur < 5:
+                            print(f"[WARN] BG duration too short ({dur}s). Retrying...", flush=True)
+                            continue
+                    except Exception as e:
+                        print(f"[WARN] ffprobe failed: {e}. Retrying...", flush=True)
+                        continue
+
+                    print(f"[OK] BG downloaded: {out_path} ({size} bytes, {dur:.1f}s)", flush=True)
+                    return out_path
+
+                except Exception as e:
+                    print(f"[WARN] Download failed: {e}", flush=True)
+                    continue
+
+        # bu attempt başarısızsa loop devam
+        print("[WARN] No valid BG in this attempt, retrying...", flush=True)
+
+    raise RuntimeError("Failed to download a valid background video from Pexels after retries.")
+
 
 
 # -----------------------------
