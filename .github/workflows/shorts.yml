@@ -2,15 +2,14 @@ name: Immersive Worlds — Shorts (2/day)
 
 on:
   schedule:
-    - cron: "0 20 * * *"   # daily 20:00 UTC
-    - cron: "0 22 * * *"   # daily 22:00 UTC
+    - cron: "0 18 * * *"
+    - cron: "0 20 * * *"
   workflow_dispatch:
 
 jobs:
   shorts:
     runs-on: ubuntu-latest
     timeout-minutes: 240
-
     steps:
       - uses: actions/checkout@v4
 
@@ -22,21 +21,11 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg espeak-ng libsndfile1
+          sudo apt-get install -y ffmpeg espeak-ng libsndfile1 fonts-dejavu-core
 
       - name: Install Python deps
         run: |
           pip install -r requirements.txt
-
-      # ✅ Cache state.json (repo root) so we can avoid repeats across runs
-      - name: Restore shorts state cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            state.json
-          key: shorts-state-v1
-          restore-keys: |
-            shorts-state-
 
       - name: Run shorts pipeline (public upload)
         env:
@@ -45,18 +34,11 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
 
-          # ✅ Always valid privacy value
+          # always valid
           YT_DEFAULT_PRIVACY: "public"
-
-          # Optional
-          # SHORTS_SECONDS: "35"
-          # SHORTS_FEMALE_SPEAKER: "p225"
-          # SHORTS_MALE_SPEAKER: "p226"
+          SHORTS_SECONDS: "35"
+          SHORTS_FEMALE_SPEAKER: "p225"
+          SHORTS_MALE_SPEAKER: "p226"
+          SHORTS_INNER_SPEAKER: "p225"
         run: |
           python -m src.shorts_pipeline
-
-      - name: Cleanup (keep state)
-        if: always()
-        run: |
-          # keep state.json so cache can save it
-          find out -type f -delete || true
