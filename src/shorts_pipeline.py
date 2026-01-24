@@ -265,7 +265,15 @@ def ensure_bg_image_free(queries: List[str], img_path: Path):
             last_err = e
             print(f"[WARN] Wikimedia failed ({q}): {e}", flush=True)
 
-    raise RuntimeError(f"No valid image found. Last error: {last_err}")
+    print("[WARN] No image found online, using local fallback.", flush=True)
+
+fallback = Path("assets/fallback.jpg")
+if fallback.exists():
+    shutil.copy(fallback, img_path)
+    return img_path
+
+raise RuntimeError(f"No valid image found and no fallback image present. Last error: {last_err}")
+
 
 
 # ---------------------------
