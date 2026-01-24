@@ -53,6 +53,20 @@ class Msg:
 # -----------------------------
 # Helpers
 # -----------------------------
+def ffmpeg_safe_text(s: str) -> str:
+    """
+    Make text safe for ffmpeg drawtext
+    """
+    if not s:
+        return ""
+    return (
+        s.replace("\\", "\\\\")
+         .replace(":", "\\:")
+         .replace("'", "\\'")
+         .replace('"', '\\"')
+         .replace("\n", " ")
+    )
+
 def run(cmd: List[str]):
     print(" ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
