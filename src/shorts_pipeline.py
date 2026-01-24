@@ -10,7 +10,8 @@ from typing import List, Tuple
 
 import requests
 from TTS.api import TTS
-
+import unicodedata
+import re
 from src.youtube_upload import upload_video, verify_auth
 
 OUT = Path("out")
@@ -94,12 +95,18 @@ def ffprobe_duration(path: Path) -> float:
 
 def ffmpeg_safe_text(s: str) -> str:
     """
-    Make text safe for ffmpeg drawtext.
-    Covers all common chars that break filter args.
+    FFmpeg drawtext için %100 güvenli ASCII text.
+    Unicode → ASCII normalize edilir.
     """
     if not s:
         return ""
-    return (
+
+    # Unicode → ASCII (smart quotes, … vs temizlenir)
+    s = unicodedata.normalize("NFKD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+
+    # FFmpeg özel karakter escape
+    s = (
         s.replace("\\", "\\\\")
          .replace("\n", " ")
          .replace("\r", " ")
@@ -110,6 +117,10 @@ def ffmpeg_safe_text(s: str) -> str:
          .replace("[", "\\[")
          .replace("]", "\\]")
     )
+
+    # ekstra güvenlik: çoklu boşluk
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 # -----------------------------
