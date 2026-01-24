@@ -19,7 +19,10 @@ OUT.mkdir(exist_ok=True)
 
 STATE_FILE = Path("state.json")  # repo root'ta (cache için)
 DURATION = int(os.getenv("SHORTS_SECONDS", "35"))
-PRIVACY = os.getenv("YT_DEFAULT_PRIVACY", "public")
+PRIVACY = (os.getenv("YT_DEFAULT_PRIVACY", "public") or "public").strip().lower()
+if PRIVACY not in ("public", "unlisted", "private"):
+    print(f"[WARN] Invalid privacy '{PRIVACY}', falling back to 'public'", flush=True)
+    PRIVACY = "public"
 
 # Voices (Coqui TTS VCTK)
 FEMALE_SPK = os.getenv("SHORTS_FEMALE_SPEAKER", "p225")
