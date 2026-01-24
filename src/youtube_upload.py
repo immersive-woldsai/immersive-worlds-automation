@@ -4,13 +4,14 @@ from typing import List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google.auth.transport.requests import Request
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
 def _get_creds() -> Credentials:
     return Credentials(
-        None,
+        token=None,
         refresh_token=os.environ["YT_REFRESH_TOKEN"],
         token_uri="https://oauth2.googleapis.com/token",
         client_id=os.environ["YT_CLIENT_ID"],
@@ -25,16 +26,12 @@ def _bool_env(name: str, default: str = "false") -> bool:
 
 
 def set_thumbnail(youtube, video_id: str, thumbnail_file: str) -> None:
-    """
-    Sets video thumbnail. This does NOT require a different scope than upload in most cases.
-    If it fails, we log and continue.
-    """
     request = youtube.thumbnails().set(
         videoId=video_id,
         media_body=MediaFileUpload(thumbnail_file),
     )
     request.execute()
-    print("[OK] Thumbnail set:", thumbnail_file)
+    print("[OK] Thumbnail set:", thumbnail_file, flush=True)
 
 
 def upload_video(
@@ -45,11 +42,22 @@ def upload_video(
     privacy_status: str = "unlisted",
     category_id: str = "22",
     language: str = "en",
-    thumbnail_file: Optional[str] = None,  # <-- NEW (optional)
+    thumbnail_file: Optional[str] = None,
 ) -> str:
     creds = _get_creds()
-    youtube = build("youtube", "v3", credentials=creds)
 
+    # Proactively refresh before upload to fail fast if token is dead/revoked
+    try:
+        creds.refresh(Request())
+    except Exception as e:
+        print(
+            "[ERROR] OAuth refresh failed. Token may be expired/revoked or consent is in Testing mode.\n"
+            f"Reason: {e}",
+            flush=True,
+        )
+        raise
+
+    youtube = build("youtube", "v3", credentials=creds)
     notify_subscribers = _bool_env("YT_NOTIFY_SUBSCRIBERS", "false")
 
     body = {
@@ -80,10 +88,10 @@ def upload_video(
     while response is None:
         status, response = request.next_chunk()
         if status:
-            print(f"Upload progress: {int(status.progress() * 100)}%")
+            print(f"Upload progress: {int(status.progress() * 100)}%", flush=True)
 
     video_id = response["id"]
-    print("Uploaded video id:", video_id)
+    print("Uploaded video id:", video_id, flush=True)
 
     # Thumbnail (optional)
     if thumbnail_file:
@@ -91,8 +99,8 @@ def upload_video(
             if os.path.exists(thumbnail_file):
                 set_thumbnail(youtube, video_id, thumbnail_file)
             else:
-                print("[WARN] Thumbnail file not found:", thumbnail_file)
+                print("[WARN] Thumbnail file not found:", thumbnail_file, flush=True)
         except Exception as e:
-            print("[WARN] Thumbnail set failed:", e)
+            print("[WARN] Thumbnail set failed:", e, flush=True)
 
     return video_id
