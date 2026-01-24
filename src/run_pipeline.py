@@ -68,13 +68,10 @@ def download_bg_long(out_path: Path):
 
 def cleanup_out():
     """
-    Keep only small essentials if you want, but default: delete everything in out/
-    so free tier disk never fills.
+    Default: delete everything in out/ so free tier disk never fills.
     """
     try:
-        # remove only heavy outputs
         for p in OUT.glob("*"):
-            # keep nothing by default; safest for free tier
             if p.is_file():
                 p.unlink()
     except Exception as e:
@@ -84,7 +81,7 @@ def cleanup_out():
 def main():
     # --- SETTINGS ---
     minutes = int(os.getenv("LONG_MINUTES", "60"))   # 45-80 arası
-    speaker = os.getenv("LONG_SPEAKER", "p225")      # p225 (female-ish), p226 (male-ish)
+    speaker = os.getenv("LONG_SPEAKER", "p225")      # p225, p226 etc.
     privacy = os.getenv("YT_DEFAULT_PRIVACY", "public")
 
     # --- 0) Background (guarantee it exists) ---
@@ -116,16 +113,15 @@ def main():
 
     total_dur = int(round(ffprobe_duration(final_audio)))
 
-    # --- 4) Render long video (BACKGROUND IMAGE + SLOW ZOOM) + mux audio INSIDE ---
+    # --- 4) Render long video + mux audio ---
     mp4 = OUT / "long.mp4"
-
     render_long_video(
         total_seconds=total_dur,
         title=story["title"],
         chapters=timestamps,
         bg_img=bg_img,
         audio_wav=final_audio,
-        out_mp4=mp4
+        out_mp4=mp4,
     )
 
     # --- 5) Metadata (title/desc/tags + timestamps) ---
@@ -141,18 +137,19 @@ def main():
     )
 
     # --- 6) Upload ---
-upload_video(
-    video_file=str(mp4),
-    title=story["title"],
-    description=description,
-    tags=story["tags"],
-    privacy_status=privacy,
-    category_id="22",
-    language="en",
-    thumbnail_file=str(OUT / "thumb.jpg"),
-)
+    thumb = OUT / "thumb.jpg"
+    upload_video(
+        video_file=str(mp4),
+        title=story["title"],
+        description=description,
+        tags=story["tags"],
+        privacy_status=privacy,
+        category_id="22",
+        language="en",
+        thumbnail_file=str(thumb) if thumb.exists() else None,
+    )
 
-    # --- 7) Cleanup (free tier safe) ---
+    # --- 7) Cleanup ---
     cleanup_out()
 
 
