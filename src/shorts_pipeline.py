@@ -197,7 +197,14 @@ def main():
 
         overlay_dir = OUT / "overlays"
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
-        times = [l.t for l in lines]
+        times = []
+        for l in lines:
+            t0 = max(0.0, l.t - 0.6)      # typing start (0.6sn)
+            times.append(t0)              # typ1
+            times.append(t0 + 0.2)        # typ2
+            times.append(t0 + 0.4)        # typ3
+            times.append(l.t)             # full
+
 
         # 4) TTS per message + timeline audio (ONLY voices)
         tts_dir = OUT / "tts"
