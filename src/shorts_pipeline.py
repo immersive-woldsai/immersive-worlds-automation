@@ -179,35 +179,38 @@ def download_bg_from_pexels(out_path: Path) -> Path:
 TOPIC_HOOKS = [
     "I saw something today and I can't say it out loud.",
     "This is the kind of truth people only admit at 2 AM.",
-    "Everyone talks about it… but nobody says the real part.",
+    "Everyone talks about it... but nobody says the real part.",
     "I almost sent this message. Then I froze.",
     "I learned something this week that changed how I see people.",
-    "This is embarrassing to admit… but it’s honest.",
+    "This is embarrassing to admit... but it's honest.",
 ]
 
 CONFESSIONS = [
     "I keep acting calm, but I'm not okay inside.",
-    "I realized the ‘nice’ version of me is just fear with good manners.",
+    "I realized the 'nice' version of me is just fear with good manners.",
     "I don't miss them. I miss who I was before them.",
-    "I think I’m addicted to uncertainty.",
-    "I’m tired of being the strong one.",
+    "I think I'm addicted to uncertainty.",
+    "I'm tired of being the strong one.",
 ]
+
 
 TWISTS = [
     "What if the silence was the answer?",
     "What if you already outgrew them?",
     "What if you were right the first time?",
-    "What if you’re not behind… just early?",
-    "What if the problem isn’t them?",
+    "What if you're not behind... just early?",
+    "What if the problem isn't them?",
 ]
 
+
 CLIFF = [
-    "I can’t type the last part here.",
-    "If I say it… it changes everything.",
-    "Promise you won’t ask me who.",
-    "I’m deleting this in 10 seconds.",
-    "Just… don’t look at me the same after this.",
+    "I can't type the last part here.",
+    "If I say it... it changes everything.",
+    "Promise you won't ask me who.",
+    "I'm deleting this in 10 seconds.",
+    "Just... don't look at me the same after this.",
 ]
+
 
 
 def _hhmm(base: datetime, add_min: int) -> str:
