@@ -3,6 +3,17 @@ from pathlib import Path
 from typing import List
 from PIL import Image, ImageDraw, ImageFont
 
+import random
+
+THEMES = [
+    # (base_bg_rgb, doodle_alpha)
+    ((18, 24, 28), 18),     # dark teal
+    ((22, 18, 28), 18),     # dark purple
+    ((16, 22, 18), 18),     # dark green
+    ((28, 20, 18), 18),     # dark brown
+    ((15, 15, 18), 18),     # near-black blue
+    ((30, 35, 40), 16),     # gray-ish
+]
 
 @dataclass
 class Msg:
