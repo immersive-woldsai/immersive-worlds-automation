@@ -358,12 +358,22 @@ def build_chat_audio(msgs: List[Msg], out_wav: Path, gap_sec: float = 0.25) -> P
 # -----------------------------
 # 4) Render WhatsApp-like overlay (drawtext boxes) + mux audio
 # -----------------------------
-def build_filtergraph(msgs: List[Msg]) -> str:
+def write_textfile(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # ffmpeg drawtext textfile için en güvenlisi: UTF-8 yaz, newline yok
+    path.write_text((text or "").replace("\n", " ").replace("\r", " "), encoding="utf-8")
+
+def build_filtergraph(msgs: List[Msg], text_dir: Path) -> str:
     chat_h = 980
     filters = [f"drawbox=x=0:y=0:w=iw:h={chat_h}:color=black@0.30:t=fill"]
 
+    # Header textfile
+    header_file = text_dir / "header.txt"
+    write_textfile(header_file, "WhatsApp")
+
     filters.append(
-        f"drawtext=fontfile='{FONT}':text='{ffmpeg_safe_text('WhatsApp')}':x=60:y=25:fontsize=34:fontcolor=white@0.92"
+        f"drawtext=fontfile='{FONT}':textfile='{header_file}':"
+        "reload=1:x=60:y=25:fontsize=34:fontcolor=white@0.92"
     )
 
     y0 = 140
@@ -389,49 +399,58 @@ def build_filtergraph(msgs: List[Msg]) -> str:
             timecolor = "white@0.65"
             tick = True
 
-        # ✅ SAFE TEXT HERE
-        safe_msg = ffmpeg_safe_text(m.text)
-        safe_time = ffmpeg_safe_text(m.hhmm)
+        # message textfile
+        msg_file = text_dir / f"msg_{i:02d}.txt"
+        time_file = text_dir / f"time_{i:02d}.txt"
+        write_textfile(msg_file, m.text)
+        write_textfile(time_file, m.hhmm)
 
+        # NOTE: enable uses commas and no quotes to avoid escaping issues
         filters.append(
             "drawtext="
             f"fontfile='{FONT}':"
-            f"text='{safe_msg}':"
+            f"textfile='{msg_file}':reload=1:"
             f"x={x}:y={y}:"
             "fontsize=38:"
             f"fontcolor={fontcolor}:"
             "box=1:"
             f"boxcolor={boxcolor}:"
             "boxborderw=22:"
-            f"enable='between(t,{start},{end})'"
+            f"enable=between(t\\,{start}\\,{end})"
         )
 
         filters.append(
             "drawtext="
             f"fontfile='{FONT}':"
-            f"text='{safe_time}':"
+            f"textfile='{time_file}':reload=1:"
             f"x={x+10}:y={y+92}:"
             "fontsize=24:"
             f"fontcolor={timecolor}:"
-            f"enable='between(t,{start},{end})'"
+            f"enable=between(t\\,{start}\\,{end})"
         )
 
         if tick:
+            tick_file = text_dir / f"tick_{i:02d}.txt"
+            write_textfile(tick_file, "✓✓")
             filters.append(
                 "drawtext="
                 f"fontfile='{FONT}':"
-                f"text='{ffmpeg_safe_text('✓✓')}':"
+                f"textfile='{tick_file}':reload=1:"
                 f"x={x+280}:y={y+92}:"
                 "fontsize=26:"
                 "fontcolor=white@0.75:"
-                f"enable='between(t,{start},{end})'"
+                f"enable=between(t\\,{start}\\,{end})"
             )
 
     return ",".join(filters)
 
 
+
 def render_short(bg_video: Path, audio_wav: Path, out_mp4: Path, msgs: List[Msg]) -> Path:
-    vf = build_filtergraph(msgs)
+    text_dir = OUT / "text"
+    text_dir.mkdir(exist_ok=True)
+
+    vf = build_filtergraph(msgs, text_dir)
 
     extra_vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -458,6 +477,7 @@ def render_short(bg_video: Path, audio_wav: Path, out_mp4: Path, msgs: List[Msg]
         str(out_mp4)
     ])
     return out_mp4
+
 
 
 # -----------------------------
