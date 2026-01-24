@@ -1,5 +1,4 @@
 import os
-import json
 import random
 import shutil
 import subprocess
@@ -8,230 +7,43 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple
 
-import requests
-from TTS.api import TTS
-import unicodedata
-import re
 from src.youtube_upload import upload_video, verify_auth
+from src.pexels_bg import download_bg_from_pexels
+from src.shorts_audio import tts_to_wav, build_timeline_audio
+from src.wp_overlay import render_whatsapp_overlays, Msg as WpMsg
 
 OUT = Path("out")
 OUT.mkdir(exist_ok=True)
 
-STATE_FILE = Path("state.json")  # repo root'ta (cache için)
 DURATION = int(os.getenv("SHORTS_SECONDS", "35"))
 PRIVACY = (os.getenv("YT_DEFAULT_PRIVACY", "public") or "public").strip().lower()
 if PRIVACY not in ("public", "unlisted", "private"):
-    print(f"[WARN] Invalid privacy '{PRIVACY}', falling back to 'public'", flush=True)
     PRIVACY = "public"
 
-# Voices (Coqui TTS VCTK)
 FEMALE_SPK = os.getenv("SHORTS_FEMALE_SPEAKER", "p225")
-MALE_SPK = os.getenv("SHORTS_MALE_SPEAKER", "p226")
-INNER_SPK = os.getenv("SHORTS_INNER_SPEAKER", "p225")
-
-PEXELS_API = "https://api.pexels.com/videos/search"
-
-# “çocuksu olmasın” -> adult/clean satisfying b-roll
-PEXELS_QUERIES = [
-    "precision work hands",
-    "craftsmanship close up",
-    "macro texture hands",
-    "minimal process hands",
-    "cinematic b-roll hands",
-    "tools close up",
-    "calming b-roll process",
-    "oddly satisfying close up",
-]
+MALE_SPK   = os.getenv("SHORTS_MALE_SPEAKER", "p226")
+INNER_SPK  = os.getenv("SHORTS_INNER_SPEAKER", "p225")
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
-@dataclass
-class Msg:
-    who: str      # "A" (female), "B" (male), "INNER"
-    text: str
-    t: float      # appear time (sec)
-    hhmm: str     # shown time
-
-
-# -----------------------------
-# Helpers
-# -----------------------------
 def run(cmd: List[str]):
     print(" ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
 
 def cleanup_out():
-    """Always free disk (after upload or failure)."""
     try:
         for p in OUT.glob("*"):
             if p.is_file():
                 p.unlink()
-            elif p.is_dir():
+            else:
                 shutil.rmtree(p, ignore_errors=True)
     except Exception as e:
         print("[WARN] cleanup failed:", e, flush=True)
 
 
-def load_state() -> dict:
-    if STATE_FILE.exists():
-        try:
-            return json.loads(STATE_FILE.read_text())
-        except Exception:
-            return {"n": 0}
-    return {"n": 0}
-
-
-def save_state(s: dict):
-    STATE_FILE.write_text(json.dumps(s, indent=2))
-
-
-def ffprobe_duration(path: Path) -> float:
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-        capture_output=True, text=True, check=True
-    )
-    return float(r.stdout.strip())
-
-
-def ffmpeg_safe_text(s: str) -> str:
-    """
-    FFmpeg drawtext için %100 güvenli ASCII text.
-    Unicode → ASCII normalize edilir.
-    """
-    if not s:
-        return ""
-
-    # Unicode → ASCII (smart quotes, … vs temizlenir)
-    s = unicodedata.normalize("NFKD", s)
-    s = s.encode("ascii", "ignore").decode("ascii")
-
-    # FFmpeg özel karakter escape
-    s = (
-        s.replace("\\", "\\\\")
-         .replace("\n", " ")
-         .replace("\r", " ")
-         .replace(":", "\\:")
-         .replace("'", "\\'")
-         .replace('"', '\\"')
-         .replace("%", "\\%")
-         .replace("[", "\\[")
-         .replace("]", "\\]")
-    )
-
-    # ekstra güvenlik: çoklu boşluk
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-# -----------------------------
-# 1) Download a real background video from Pexels (portrait)
-# -----------------------------
-def download_bg_from_pexels(out_path: Path) -> Path:
-    key = os.environ["PEXELS_API_KEY"]
-    headers = {"Authorization": key}
-
-    # Daha stabil olsun diye 6 deneme
-    for attempt in range(1, 7):
-        q = random.choice(PEXELS_QUERIES)
-        print(f"[BG] Search attempt {attempt} query='{q}'", flush=True)
-
-        r = requests.get(
-            PEXELS_API,
-            headers=headers,
-            params={"query": q, "orientation": "portrait", "per_page": 40},
-            timeout=30,
-        )
-        r.raise_for_status()
-        videos = r.json().get("videos", [])
-        if not videos:
-            continue
-
-        random.shuffle(videos)
-
-        # Her attempt'te birkaç videoyu dene
-        for v in videos[:8]:
-            files = v.get("video_files", [])
-            if not files:
-                continue
-
-            # Portrait + en iyi "orta" kaliteyi seç:
-            # çok küçük (preview) istemiyoruz, çok büyük de istemiyoruz
-            cand = []
-            for f in files:
-                w = f.get("width") or 0
-                h = f.get("height") or 0
-                size = f.get("file_size") or 0
-                link = f.get("link")
-                if not link:
-                    continue
-                # portrait filtre
-                if h > w and h >= 720:
-                    cand.append((abs((w / h) - (9 / 16)), size, link, w, h))
-
-            if not cand:
-                continue
-
-            # En iyi aspect ratio yakın olanlardan size'a göre sırala (orta boy hedef)
-            # file_size bazen yok olur; o yüzden 2. sıralama olarak çözünürlüğü kullanıyoruz
-            cand.sort(key=lambda x: (x[0], 0 if x[1] == 0 else abs(x[1] - 8_000_000)))  # ~8MB hedef
-
-            # En iyi 3 aday linki dene
-            for _, _, url, w, h in cand[:3]:
-                try:
-                    print(f"[BG] Trying file {w}x{h} url=({url[:60]}...)", flush=True)
-
-                    # indir
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    if out_path.exists():
-                        out_path.unlink()
-
-                    with requests.get(url, stream=True, timeout=180) as rr:
-                        rr.raise_for_status()
-                        with open(out_path, "wb") as f:
-                            for chunk in rr.iter_content(1024 * 1024):
-                                if chunk:
-                                    f.write(chunk)
-
-                    # valid mi?
-                    if not out_path.exists():
-                        continue
-                    size = out_path.stat().st_size
-
-                    # Çok küçükse reject (preview/bozuk)
-                    if size < 2_000_000:  # 2MB altı istemiyoruz
-                        print(f"[WARN] BG too small ({size} bytes). Retrying...", flush=True)
-                        continue
-
-                    # ffprobe ile gerçekten video mu kontrol et
-                    try:
-                        dur = ffprobe_duration(out_path)
-                        if dur < 5:
-                            print(f"[WARN] BG duration too short ({dur}s). Retrying...", flush=True)
-                            continue
-                    except Exception as e:
-                        print(f"[WARN] ffprobe failed: {e}. Retrying...", flush=True)
-                        continue
-
-                    print(f"[OK] BG downloaded: {out_path} ({size} bytes, {dur:.1f}s)", flush=True)
-                    return out_path
-
-                except Exception as e:
-                    print(f"[WARN] Download failed: {e}", flush=True)
-                    continue
-
-        # bu attempt başarısızsa loop devam
-        print("[WARN] No valid BG in this attempt, retrying...", flush=True)
-
-    raise RuntimeError("Failed to download a valid background video from Pexels after retries.")
-
-
-
-# -----------------------------
-# 2) Chat generator (mixed: A/B or A/INNER)
-# -----------------------------
+# -------- Chat (ASCII only) --------
 TOPIC_HOOKS = [
     "I saw something today and I can't say it out loud.",
     "This is the kind of truth people only admit at 2 AM.",
@@ -249,7 +61,6 @@ CONFESSIONS = [
     "I'm tired of being the strong one.",
 ]
 
-
 TWISTS = [
     "What if the silence was the answer?",
     "What if you already outgrew them?",
@@ -257,7 +68,6 @@ TWISTS = [
     "What if you're not behind... just early?",
     "What if the problem isn't them?",
 ]
-
 
 CLIFF = [
     "I can't type the last part here.",
@@ -268,22 +78,30 @@ CLIFF = [
 ]
 
 
-
 def _hhmm(base: datetime, add_min: int) -> str:
-    # %-I Linux/mac OK; if it ever fails on runner, replace with %I and strip leading 0
+    # Runner linux: %-I works. If ever fails, change to %I and strip leading zero.
     return (base + timedelta(minutes=add_min)).strftime("%-I:%M %p")
 
 
-def generate_chat(duration_sec: int = 35) -> Tuple[str, List[Msg]]:
+@dataclass
+class TimedLine:
+    who: str
+    text: str
+    t: float
+    hhmm: str
+
+
+def generate_chat() -> Tuple[str, List[TimedLine]]:
     base = datetime.utcnow()
-    two_person = random.random() < 0.7  # mixed style
+
+    two_person = random.random() < 0.7
     hook = random.choice(TOPIC_HOOKS)
     conf = random.choice(CONFESSIONS)
     twist = random.choice(TWISTS)
     cliff = random.choice(CLIFF)
 
     if two_person:
-        title = "I almost sent this…"
+        title = "I almost sent this..."
         lines = [
             ("A", hook),
             ("B", "Say it."),
@@ -292,215 +110,120 @@ def generate_chat(duration_sec: int = 35) -> Tuple[str, List[Msg]]:
             ("A", cliff),
         ]
     else:
-        title = "My inner voice said this…"
+        title = "My inner voice said this..."
         lines = [
             ("A", hook),
-            ("INNER", "Don’t send it."),
+            ("INNER", "Don't send it."),
             ("A", conf),
             ("INNER", twist),
             ("A", cliff),
         ]
 
+    # timeline: 35 sec
     appear = [2.0, 7.0, 14.0, 22.0, 29.0]
 
-    msgs: List[Msg] = []
+    out: List[TimedLine] = []
     for i, ((who, text), t) in enumerate(zip(lines, appear)):
-        msgs.append(Msg(who=who, text=text, t=t, hhmm=_hhmm(base, i)))
-    return title, msgs
+        out.append(TimedLine(who=who, text=text, t=t, hhmm=_hhmm(base, i)))
+    return title, out
 
 
-# -----------------------------
-# 3) TTS + build audio
-# -----------------------------
-def tts_to_wav(text: str, out_wav: Path, speaker: str):
-    tts = TTS(model_name="tts_models/en/vctk/vits", gpu=False, progress_bar=False)
-    tts.tts_to_file(text=text, file_path=str(out_wav), speaker=speaker)
+def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_wav: Path, out_mp4: Path):
+    """
+    bg video: silent
+    overlays: overlay_01..overlay_05 (cumulative chat states)
+    times: [t1, t2, t3, t4, t5] start times
+    """
+    # Base video input (force 35 sec, mute)
+    cmd = ["ffmpeg","-y","-hide_banner","-loglevel","error",
+           "-stream_loop","0","-i", str(bg_mp4)]
 
+    # Overlay inputs
+    for p in overlays:
+        cmd += ["-i", str(p)]
 
-def build_chat_audio(msgs: List[Msg], out_wav: Path, gap_sec: float = 0.25) -> Path:
-    tmp_dir = OUT / "tts"
-    tmp_dir.mkdir(exist_ok=True)
+    # Audio input
+    cmd += ["-i", str(audio_wav)]
 
-    wavs = []
-    for i, m in enumerate(msgs, start=1):
-        wav = tmp_dir / f"m{i:02d}.wav"
-        if m.who == "A":
-            spk = FEMALE_SPK
-        elif m.who == "B":
-            spk = MALE_SPK
-        else:
-            spk = INNER_SPK
-        tts_to_wav(m.text, wav, speaker=spk)
-        wavs.append(wav)
+    # filter: scale/crop bg then overlay each png with enable between
+    # overlays are cumulative so each one takes over from its time to end
+    vf = []
+    vf.append("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.03:saturation=1.05[base]")
 
-    silence = tmp_dir / "silence.wav"
-    run([
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono",
-        "-t", str(gap_sec), str(silence)
-    ])
+    cur = "base"
+    for i, (p, t_start) in enumerate(zip(overlays, times), start=1):
+        # overlay i is input i (since input0 is bg)
+        in_idx = i
+        out_lbl = f"v{i}"
+        # show overlay i from its start time to end
+        vf.append(f"[{cur}][{in_idx}:v]overlay=0:0:enable=between(t\\,{t_start}\\,{DURATION})[{out_lbl}]")
+        cur = out_lbl
 
-    inputs = []
-    for w in wavs:
-        inputs += ["-i", str(w), "-i", str(silence)]
+    filter_complex = ";".join(vf)
 
-    n = len(inputs) // 2
-    filter_in = "".join([f"[{i}:a]" for i in range(n)])
-    filter_complex = f"{filter_in}concat=n={n}:v=0:a=1[a]"
-
-    run([
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        *inputs,
+    # map video + map audio
+    # Ensure 35 sec video, audio padded already in audio builder.
+    cmd += [
         "-filter_complex", filter_complex,
-        "-map", "[a]",
-        str(out_wav)
-    ])
-    return out_wav
-
-
-# -----------------------------
-# 4) Render WhatsApp-like overlay (drawtext boxes) + mux audio
-# -----------------------------
-def write_textfile(path: Path, text: str):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # ffmpeg drawtext textfile için en güvenlisi: UTF-8 yaz, newline yok
-    path.write_text((text or "").replace("\n", " ").replace("\r", " "), encoding="utf-8")
-
-def build_filtergraph(msgs: List[Msg], text_dir: Path) -> str:
-    chat_h = 980
-    filters = [f"drawbox=x=0:y=0:w=iw:h={chat_h}:color=black@0.30:t=fill"]
-
-    # Header textfile
-    header_file = text_dir / "header.txt"
-    write_textfile(header_file, "WhatsApp")
-
-    filters.append(
-        f"drawtext=fontfile='{FONT}':textfile='{header_file}':"
-        "reload=1:x=60:y=25:fontsize=34:fontcolor=white@0.92"
-    )
-
-    y0 = 140
-    dy = 165
-    left_x = 70
-    right_x = 520
-
-    for i, m in enumerate(msgs):
-        y = y0 + i * dy
-        start = m.t
-        end = float(DURATION)
-
-        if m.who == "A":
-            x = left_x
-            boxcolor = "white@0.92"
-            fontcolor = "black@0.92"
-            timecolor = "black@0.55"
-            tick = False
-        else:
-            x = right_x
-            boxcolor = "green@0.30"
-            fontcolor = "white@0.95"
-            timecolor = "white@0.65"
-            tick = True
-
-        # message textfile
-        msg_file = text_dir / f"msg_{i:02d}.txt"
-        time_file = text_dir / f"time_{i:02d}.txt"
-        write_textfile(msg_file, m.text)
-        write_textfile(time_file, m.hhmm)
-
-        # NOTE: enable uses commas and no quotes to avoid escaping issues
-        filters.append(
-            "drawtext="
-            f"fontfile='{FONT}':"
-            f"textfile='{msg_file}':reload=1:"
-            f"x={x}:y={y}:"
-            "fontsize=38:"
-            f"fontcolor={fontcolor}:"
-            "box=1:"
-            f"boxcolor={boxcolor}:"
-            "boxborderw=22:"
-            f"enable=between(t\\,{start}\\,{end})"
-        )
-
-        filters.append(
-            "drawtext="
-            f"fontfile='{FONT}':"
-            f"textfile='{time_file}':reload=1:"
-            f"x={x+10}:y={y+92}:"
-            "fontsize=24:"
-            f"fontcolor={timecolor}:"
-            f"enable=between(t\\,{start}\\,{end})"
-        )
-
-        if tick:
-            tick_file = text_dir / f"tick_{i:02d}.txt"
-            write_textfile(tick_file, "✓✓")
-            filters.append(
-                "drawtext="
-                f"fontfile='{FONT}':"
-                f"textfile='{tick_file}':reload=1:"
-                f"x={x+280}:y={y+92}:"
-                "fontsize=26:"
-                "fontcolor=white@0.75:"
-                f"enable=between(t\\,{start}\\,{end})"
-            )
-
-    return ",".join(filters)
-
-
-
-def render_short(bg_video: Path, audio_wav: Path, out_mp4: Path, msgs: List[Msg]) -> Path:
-    text_dir = OUT / "text"
-    text_dir.mkdir(exist_ok=True)
-
-    vf = build_filtergraph(msgs, text_dir)
-
-    extra_vf = (
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,"
-        "eq=contrast=1.03:saturation=1.05,"
-        f"{vf}"
-    )
-
-    run([
-        "ffmpeg", "-y",
-        "-hide_banner", "-loglevel", "error",
-        "-stream_loop", "0", "-i", str(bg_video),
-        "-i", str(audio_wav),
+        "-map", f"[{cur}]",
+        "-map", f"{len(overlays)+1}:a",
         "-t", str(DURATION),
-        "-vf", extra_vf,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "22",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "160k",
-        "-shortest",
-        "-movflags", "+faststart",
+        "-c:v","libx264","-preset","veryfast","-crf","22","-pix_fmt","yuv420p",
+        "-c:a","aac","-b:a","160k",
+        "-movflags","+faststart",
         str(out_mp4)
-    ])
-    return out_mp4
+    ]
+
+    run(cmd)
 
 
-
-# -----------------------------
-# MAIN
-# -----------------------------
 def main():
     try:
         verify_auth()
 
+        # 1) BG video download (real satisfying), will be used silently
         bg = OUT / "bg.mp4"
         download_bg_from_pexels(bg)
 
-        title, msgs = generate_chat(DURATION)
+        # 2) Chat
+        title, lines = generate_chat()
 
-        audio = OUT / "audio.wav"
-        build_chat_audio(msgs, audio, gap_sec=0.25)
+        # 3) WhatsApp overlays (cumulative states)
+        wp_msgs = [WpMsg(who=("A" if l.who=="A" else "B"), text=l.text, hhmm=l.hhmm) for l in lines]
+        # For INNER we still show it as right bubble (B-like)
+        for i in range(len(wp_msgs)):
+            if lines[i].who == "INNER":
+                wp_msgs[i].who = "B"
 
+        overlay_dir = OUT / "overlays"
+        overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
+        times = [l.t for l in lines]
+
+        # 4) TTS per message + timeline audio (ONLY voices)
+        tts_dir = OUT / "tts"
+        tts_dir.mkdir(exist_ok=True)
+
+        wav_items: List[Tuple[float, Path]] = []
+        for i, l in enumerate(lines, start=1):
+            wav = tts_dir / f"m{i:02d}.wav"
+            if l.who == "A":
+                spk = FEMALE_SPK
+            elif l.who == "B":
+                spk = MALE_SPK
+            else:
+                spk = INNER_SPK
+            tts_to_wav(l.text, wav, speaker=spk)
+            # Slight delay so message appears then voice starts (more WhatsApp feel)
+            wav_items.append((l.t + 0.25, wav))
+
+        audio = OUT / "chat_audio.wav"
+        build_timeline_audio(wav_items, audio, total_sec=DURATION)
+
+        # 5) Render final mp4 (bg muted, overlays, voice)
         mp4 = OUT / "short.mp4"
-        render_short(bg, audio, mp4, msgs)
+        render_final(bg, overlays, times, audio, mp4)
 
+        # 6) Upload
         hashtags = "#shorts #texting #chatstory #relatable #psychology"
         description = f"{title}\n\n{hashtags}\n"
 
@@ -508,7 +231,7 @@ def main():
             video_file=str(mp4),
             title=title,
             description=description,
-            tags=["shorts", "chat", "texting", "story", "satisfying", "viral", "psychology"],
+            tags=["shorts","chat","texting","story","satisfying","viral","psychology"],
             privacy_status=PRIVACY,
             category_id="22",
             language="en",
