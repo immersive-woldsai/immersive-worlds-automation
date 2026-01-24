@@ -20,6 +20,11 @@ def _get_creds() -> Credentials:
     )
 
 
+def verify_auth() -> None:
+    creds = _get_creds()
+    creds.refresh(Request())
+
+
 def _bool_env(name: str, default: str = "false") -> bool:
     v = os.getenv(name, default).strip().lower()
     return v in ("1", "true", "yes", "y", "on")
@@ -46,12 +51,12 @@ def upload_video(
 ) -> str:
     creds = _get_creds()
 
-    # Proactively refresh before upload to fail fast if token is dead/revoked
+    # Fail fast if token is dead/revoked
     try:
         creds.refresh(Request())
     except Exception as e:
         print(
-            "[ERROR] OAuth refresh failed. Token may be expired/revoked or consent is in Testing mode.\n"
+            "[ERROR] OAuth refresh failed. Token may be expired/revoked.\n"
             f"Reason: {e}",
             flush=True,
         )
@@ -93,7 +98,6 @@ def upload_video(
     video_id = response["id"]
     print("Uploaded video id:", video_id, flush=True)
 
-    # Thumbnail (optional)
     if thumbnail_file:
         try:
             if os.path.exists(thumbnail_file):
