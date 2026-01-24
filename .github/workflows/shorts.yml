@@ -3,7 +3,7 @@ name: Immersive Worlds — Shorts (2/day)
 on:
   schedule:
     - cron: "0 20 * * *"   # daily 20:00 UTC
-    - cron: "0 22 * * *"  # daily 22:00 UTC
+    - cron: "0 22 * * *"   # daily 22:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -27,16 +27,32 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      # ✅ Cache "out/state.json" so we can avoid repeats across runs
+      - name: Restore shorts state cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/state.json
+          key: shorts-state-v1
+          restore-keys: |
+            shorts-state-
+
       - name: Run shorts pipeline (public upload)
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           YT_DEFAULT_PRIVACY: ${{ secrets.YT_DEFAULT_PRIVACY }}
+
+          # Optional: If you run Stable Diffusion somewhere reachable, set as secret/var:
+          # SDWEBUI_URL: ${{ secrets.SDWEBUI_URL }}
+          # ENABLE_SD: "true"
+          # ENABLE_ZOOMPAN: "false"
         run: |
           python -m src.shorts_pipeline
 
-      - name: Cleanup
+      - name: Cleanup (keep state)
         if: always()
         run: |
-          rm -rf out || true
+          # keep state.json so cache can save it
+          find out -type f ! -name "state.json" -delete || true
