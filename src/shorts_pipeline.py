@@ -53,20 +53,6 @@ class Msg:
 # -----------------------------
 # Helpers
 # -----------------------------
-def ffmpeg_safe_text(s: str) -> str:
-    """
-    Make text safe for ffmpeg drawtext
-    """
-    if not s:
-        return ""
-    return (
-        s.replace("\\", "\\\\")
-         .replace(":", "\\:")
-         .replace("'", "\\'")
-         .replace('"', '\\"')
-         .replace("\n", " ")
-    )
-
 def run(cmd: List[str]):
     print(" ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
@@ -106,6 +92,26 @@ def ffprobe_duration(path: Path) -> float:
     return float(r.stdout.strip())
 
 
+def ffmpeg_safe_text(s: str) -> str:
+    """
+    Make text safe for ffmpeg drawtext.
+    Covers all common chars that break filter args.
+    """
+    if not s:
+        return ""
+    return (
+        s.replace("\\", "\\\\")
+         .replace("\n", " ")
+         .replace("\r", " ")
+         .replace(":", "\\:")
+         .replace("'", "\\'")
+         .replace('"', '\\"')
+         .replace("%", "\\%")
+         .replace("[", "\\[")
+         .replace("]", "\\]")
+    )
+
+
 # -----------------------------
 # 1) Download a real background video from Pexels (portrait)
 # -----------------------------
@@ -135,7 +141,7 @@ def download_bg_from_pexels(out_path: Path) -> Path:
     if not cand:
         cand = files
 
-    # pick a mid/small file to keep pipeline fast
+    # pick smallest file to keep pipeline fast
     cand.sort(key=lambda x: (x.get("file_size") or 10**18))
     chosen = cand[0]
     url = chosen["link"]
@@ -194,6 +200,7 @@ CLIFF = [
 
 
 def _hhmm(base: datetime, add_min: int) -> str:
+    # %-I Linux/mac OK; if it ever fails on runner, replace with %I and strip leading 0
     return (base + timedelta(minutes=add_min)).strftime("%-I:%M %p")
 
 
@@ -224,7 +231,6 @@ def generate_chat(duration_sec: int = 35) -> Tuple[str, List[Msg]]:
             ("A", cliff),
         ]
 
-    # 35s içine yayılmış zamanlar (mesajlaşma hissi)
     appear = [2.0, 7.0, 14.0, 22.0, 29.0]
 
     msgs: List[Msg] = []
@@ -242,9 +248,6 @@ def tts_to_wav(text: str, out_wav: Path, speaker: str):
 
 
 def build_chat_audio(msgs: List[Msg], out_wav: Path, gap_sec: float = 0.25) -> Path:
-    """
-    Create a single wav by concatenating each msg wav + small silence.
-    """
     tmp_dir = OUT / "tts"
     tmp_dir.mkdir(exist_ok=True)
 
@@ -261,11 +264,12 @@ def build_chat_audio(msgs: List[Msg], out_wav: Path, gap_sec: float = 0.25) -> P
         wavs.append(wav)
 
     silence = tmp_dir / "silence.wav"
-    run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-         "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono",
-         "-t", str(gap_sec), str(silence)])
+    run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono",
+        "-t", str(gap_sec), str(silence)
+    ])
 
-    # Build concat list: wav + silence + wav + silence ...
     inputs = []
     for w in wavs:
         inputs += ["-i", str(w), "-i", str(silence)]
@@ -274,36 +278,25 @@ def build_chat_audio(msgs: List[Msg], out_wav: Path, gap_sec: float = 0.25) -> P
     filter_in = "".join([f"[{i}:a]" for i in range(n)])
     filter_complex = f"{filter_in}concat=n={n}:v=0:a=1[a]"
 
-    run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-         *inputs,
-         "-filter_complex", filter_complex,
-         "-map", "[a]",
-         str(out_wav)])
+    run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[a]",
+        str(out_wav)
+    ])
     return out_wav
 
 
 # -----------------------------
 # 4) Render WhatsApp-like overlay (drawtext boxes) + mux audio
 # -----------------------------
-def _esc(text: str) -> str:
-    return (text.replace("\\", "\\\\")
-                .replace(":", "\\:")
-                .replace("'", "\\'")
-                .replace("%", "\\%")
-                .replace("[", "\\[")
-                .replace("]", "\\]"))
-
-
 def build_filtergraph(msgs: List[Msg]) -> str:
-    """
-    Top area dark overlay + bubble-like drawtext boxes + time labels.
-    """
-    chat_h = 980  # top area reserved for chat
+    chat_h = 980
     filters = [f"drawbox=x=0:y=0:w=iw:h={chat_h}:color=black@0.30:t=fill"]
 
-    # Header line
     filters.append(
-        f"drawtext=fontfile='{FONT}':text='{_esc('WhatsApp')}':x=60:y=25:fontsize=34:fontcolor=white@0.92"
+        f"drawtext=fontfile='{FONT}':text='{ffmpeg_safe_text('WhatsApp')}':x=60:y=25:fontsize=34:fontcolor=white@0.92"
     )
 
     y0 = 140
@@ -329,10 +322,14 @@ def build_filtergraph(msgs: List[Msg]) -> str:
             timecolor = "white@0.65"
             tick = True
 
+        # ✅ SAFE TEXT HERE
+        safe_msg = ffmpeg_safe_text(m.text)
+        safe_time = ffmpeg_safe_text(m.hhmm)
+
         filters.append(
             "drawtext="
             f"fontfile='{FONT}':"
-            f"text='{_esc(m.text)}':"
+            f"text='{safe_msg}':"
             f"x={x}:y={y}:"
             "fontsize=38:"
             f"fontcolor={fontcolor}:"
@@ -345,7 +342,7 @@ def build_filtergraph(msgs: List[Msg]) -> str:
         filters.append(
             "drawtext="
             f"fontfile='{FONT}':"
-            f"text='{_esc(m.hhmm)}':"
+            f"text='{safe_time}':"
             f"x={x+10}:y={y+92}:"
             "fontsize=24:"
             f"fontcolor={timecolor}:"
@@ -356,7 +353,7 @@ def build_filtergraph(msgs: List[Msg]) -> str:
             filters.append(
                 "drawtext="
                 f"fontfile='{FONT}':"
-                f"text='{_esc('✓✓')}':"
+                f"text='{ffmpeg_safe_text('✓✓')}':"
                 f"x={x+280}:y={y+92}:"
                 "fontsize=26:"
                 "fontcolor=white@0.75:"
@@ -369,12 +366,10 @@ def build_filtergraph(msgs: List[Msg]) -> str:
 def render_short(bg_video: Path, audio_wav: Path, out_mp4: Path, msgs: List[Msg]) -> Path:
     vf = build_filtergraph(msgs)
 
-    # Slight transform to avoid "raw re-upload" look (tiny zoom + slight eq)
-    # Also ensures portrait scale and stable output
     extra_vf = (
-        f"scale=1080:1920:force_original_aspect_ratio=increase,"
-        f"crop=1080:1920,"
-        f"eq=contrast=1.03:saturation=1.05,"
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,"
+        "eq=contrast=1.03:saturation=1.05,"
         f"{vf}"
     )
 
@@ -403,25 +398,19 @@ def render_short(bg_video: Path, audio_wav: Path, out_mp4: Path, msgs: List[Msg]
 # -----------------------------
 def main():
     try:
-        # Fail fast if OAuth dead (no waste)
         verify_auth()
 
-        # 1) Download background video
         bg = OUT / "bg.mp4"
         download_bg_from_pexels(bg)
 
-        # 2) Create chat (mixed style)
         title, msgs = generate_chat(DURATION)
 
-        # 3) TTS + audio
         audio = OUT / "audio.wav"
         build_chat_audio(msgs, audio, gap_sec=0.25)
 
-        # 4) Render final short
         mp4 = OUT / "short.mp4"
         render_short(bg, audio, mp4, msgs)
 
-        # 5) Upload
         hashtags = "#shorts #texting #chatstory #relatable #psychology"
         description = f"{title}\n\n{hashtags}\n"
 
@@ -439,7 +428,6 @@ def main():
         print("[OK] Uploaded successfully.", flush=True)
 
     finally:
-        # Always free disk
         cleanup_out()
 
 
