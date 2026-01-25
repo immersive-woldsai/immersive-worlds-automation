@@ -120,7 +120,7 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
         ]
 
     # timeline: 35 sec
-    appear = [0.1, 1.6, 3.8, 6.1, 7.5]
+    appear = [0.9, 3.8, 7.0, 10.6, 14.0]
 
 
     out: List[TimedLine] = []
@@ -230,11 +230,12 @@ def main():
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
         times = []
         for l in lines:
-            t0 = max(0.0, l.t - 0.30)
+            t0 = max(0.0, l.t - 0.90)
             times.append(t0)           # typ1
-            times.append(t0 + 0.10)    # typ2
-            times.append(t0 + 0.20)    # typ3
+            times.append(t0 + 0.30)    # typ2
+            times.append(t0 + 0.60)    # typ3
             times.append(l.t)          # full
+
 
 
 
@@ -261,7 +262,7 @@ def main():
 
         # 5) Render final mp4 (bg muted, overlays, voice)
         mp4 = OUT / "short.mp4"
-        render_final(bg, overlays, times, audio, mp4)
+        render_final(bg, overlays, times, audio, mp4, chat_h=860)
 
         # 6) Upload
         hashtags = "#shorts #texting #chatstory #relatable #psychology"
