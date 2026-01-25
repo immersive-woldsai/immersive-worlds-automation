@@ -32,24 +32,48 @@ THEMES = [
 
 def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int, theme_seed: int) -> None:
     rng = random.Random(theme_seed)
-    base_rgb, alpha = rng.choice(THEMES)
 
-    # Base background
+    base_rgb, _alpha = rng.choice(THEMES)
+
+    # ✅ temiz, premium base
     d.rectangle([0, 0, W, chat_h], fill=(*base_rgb, 255))
 
-    # Subtle doodle pattern
-    step = rng.choice([84, 92, 100])
+    # ✅ desen de her videoda değişsin
+    style = rng.choice(PATTERN_STYLES)
+    _draw_pattern(d, W, chat_h, style=style, theme_seed=theme_seed)
+
+def _draw_pattern(d: ImageDraw.ImageDraw, W: int, chat_h: int, style: str, theme_seed: int):
+    rng = random.Random(theme_seed * 99991 + 17)
+
+    if style == "none":
+        return
+
+    # çok hafif, gözü yormasın
+    alpha = rng.choice([10, 12, 14, 16])
     col = (255, 255, 255, alpha)
 
-    for y in range(0, chat_h + step, step):
-        for x in range(0, W + step, step):
-            offx = rng.randint(-6, 6)
-            offy = rng.randint(-6, 6)
-            d.ellipse([x + 12 + offx, y + 18 + offy, x + 32 + offx, y + 38 + offy], outline=col, width=2)
-            d.arc([x + 40 + offx, y + 10 + offy, x + 82 + offx, y + 52 + offy],
-                  start=0, end=rng.choice([200, 220, 240]), fill=col, width=2)
-            d.line([x + 10 + offx, y + 60 + offy, x + 70 + offx, y + 60 + offy], fill=col, width=2)
+    if style == "dots":
+        step = rng.choice([70, 80, 90])
+        r = rng.choice([4, 5, 6])
+        for y in range(0, chat_h + step, step):
+            for x in range(0, W + step, step):
+                d.ellipse([x - r, y - r, x + r, y + r], fill=col)
 
+    elif style == "diagonal":
+        step = rng.choice([60, 72, 84])
+        for i in range(-chat_h, W, step):
+            d.line([i, 0, i + chat_h, chat_h], fill=col, width=2)
+
+    elif style == "waves":
+        step = rng.choice([80, 90, 100])
+        amp = rng.choice([10, 14, 18])
+        # basit dalga çizgileri
+        for y0 in range(50, chat_h, step):
+            points = []
+            for x in range(0, W + 1, 40):
+                y = y0 + int(amp * (1 if (x // 40) % 2 == 0 else -1))
+                points.append((x, y))
+            d.line(points, fill=col, width=2)
 
 def render_whatsapp_overlays(
     out_dir: Path,
