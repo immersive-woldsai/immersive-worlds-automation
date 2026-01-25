@@ -4,24 +4,8 @@ from typing import List, Optional
 import random
 
 from PIL import Image, ImageDraw, ImageFont
-CHAT_PROFILES = {
-    "A": {
-        "name": "Alex",
-        "avatar": "assets/avatars/a.png"
-    },
-    "B": {
-        "name": "Maya",
-        "avatar": "assets/avatars/b.png"
-    },
-    "INNER": {
-        "name": "Inner Voice",
-        "avatar": "assets/avatars/inner.png"
-    }
-}
 
-PATTERN_STYLES = [
-    "none",       # düz – premium
-]
+
 @dataclass
 class Msg:
     who: str   # "A" left, "B" right
@@ -37,49 +21,33 @@ def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
 
 
 THEMES = [
-    ((18, 24, 28), 18),   # dark teal
-    ((22, 18, 28), 18),   # dark purple
-    ((16, 22, 18), 18),   # dark green
-    ((28, 20, 18), 18),   # dark brown
-    ((15, 15, 18), 18),   # near-black blue
-    ((30, 35, 40), 16),   # gray-ish
+    ((18, 24, 28), 18),
+    ((22, 18, 28), 18),
+    ((16, 22, 18), 18),
+    ((28, 20, 18), 18),
+    ((15, 15, 18), 18),
+    ((30, 35, 40), 16),
 ]
 
-def draw_header(draw, img, who, font):
-    profile = CHAT_PROFILES[who]
+PATTERN_STYLES = ["none", "dots"]
 
-    # bar
-    draw.rectangle([0, 0, 1080, 120], fill=(18, 18, 18, 255))
+# Chat header personas (change names as you like)
+PERSONAS = [
+    ("Maya", "assets/avatars/maya.png"),
+    ("Alex", "assets/avatars/alex.png"),
+    ("Sophie", "assets/avatars/sophie.png"),
+    ("Noah", "assets/avatars/noah.png"),
+    ("Lena", "assets/avatars/lena.png"),
+    ("Ethan", "assets/avatars/ethan.png"),
+]
+INNER_PERSONA = ("Inner Voice", "assets/avatars/inner.png")
 
-    # avatar
-    avatar = Image.open(profile["avatar"]).convert("RGBA").resize((64, 64))
-    img.paste(avatar, (30, 28), avatar)
 
-    # name
-    draw.text((120, 38), profile["name"], font=font, fill=(255,255,255,255))
-
-    # status
-    draw.text((120, 72), "online", font=_font(FONT, 26), fill=(180,180,180,255))
-
-def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int, theme_seed: int) -> None:
-    rng = random.Random(theme_seed)
-
-    base_rgb, _alpha = rng.choice(THEMES)
-
-    # ✅ temiz, premium base
-    d.rectangle([0, 0, W, chat_h], fill=(*base_rgb, 255))
-
-    # ✅ desen de her videoda değişsin
-    style = rng.choice(PATTERN_STYLES)
-    _draw_pattern(d, W, chat_h, style=style, theme_seed=theme_seed)
-
-def _draw_pattern(d: ImageDraw.ImageDraw, W: int, chat_h: int, style: str, theme_seed: int):
-    rng = random.Random(theme_seed * 99991 + 17)
-
+def _draw_pattern(d: ImageDraw.ImageDraw, W: int, chat_h: int, style: str, seed: int):
+    rng = random.Random(seed * 99991 + 17)
     if style == "none":
         return
 
-    # çok hafif, gözü yormasın
     alpha = rng.choice([10, 12, 14, 16])
     col = (255, 255, 255, alpha)
 
@@ -98,13 +66,76 @@ def _draw_pattern(d: ImageDraw.ImageDraw, W: int, chat_h: int, style: str, theme
     elif style == "waves":
         step = rng.choice([80, 90, 100])
         amp = rng.choice([10, 14, 18])
-        # basit dalga çizgileri
         for y0 in range(50, chat_h, step):
             points = []
             for x in range(0, W + 1, 40):
-                y = y0 + int(amp * (1 if (x // 40) % 2 == 0 else -1))
+                y = y0 + (amp if (x // 40) % 2 == 0 else -amp)
                 points.append((x, y))
             d.line(points, fill=col, width=2)
+
+
+def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int, seed: int):
+    rng = random.Random(seed)
+    base_rgb, _ = rng.choice(THEMES)
+    d.rectangle([0, 0, W, chat_h], fill=(*base_rgb, 255))
+
+    style = rng.choice(PATTERN_STYLES)
+    _draw_pattern(d, W, chat_h, style=style, seed=seed)
+
+
+def _circle_avatar(img: Image.Image, x: int, y: int, size: int, name: str, seed: int, font_path: str):
+    """Fallback avatar: colored circle + first letter."""
+    rng = random.Random(seed + sum(ord(c) for c in name))
+    col = (rng.randint(60, 200), rng.randint(60, 200), rng.randint(60, 200), 255)
+
+    d = ImageDraw.Draw(img)
+    d.ellipse([x, y, x + size, y + size], fill=col)
+
+    letter = (name[:1] or "?").upper()
+    f = _font(font_path, 34)
+    w = d.textlength(letter, font=f)
+    d.text((x + (size - w) / 2, y + 14), letter, font=f, fill=(255, 255, 255, 255))
+
+
+def _paste_avatar(img: Image.Image, avatar_path: str, x: int, y: int, size: int, fallback_name: str, seed: int, font_path: str):
+    p = Path(avatar_path)
+    if p.exists():
+        try:
+            av = Image.open(p).convert("RGBA").resize((size, size))
+            # Make it circular
+            mask = Image.new("L", (size, size), 0)
+            md = ImageDraw.Draw(mask)
+            md.ellipse([0, 0, size, size], fill=255)
+            img.paste(av, (x, y), mask)
+            return
+        except Exception:
+            pass
+
+    # fallback
+    _circle_avatar(img, x, y, size, fallback_name, seed, font_path)
+
+
+def _draw_header(img: Image.Image, name: str, avatar_path: str, seed: int, font_path: str):
+    """
+    WhatsApp-like top bar with avatar + name + online.
+    (No more plain 'WhatsApp' text.)
+    """
+    d = ImageDraw.Draw(img)
+    bar_h = 120
+
+    # bar background
+    d.rectangle([0, 0, 1080, bar_h], fill=(14, 18, 20, 255))
+
+    # avatar
+    _paste_avatar(img, avatar_path, x=26, y=28, size=64, fallback_name=name, seed=seed, font_path=font_path)
+
+    # name + status
+    name_font = _font(font_path, 40)
+    status_font = _font(font_path, 26)
+
+    d.text((110, 34), name, font=name_font, fill=(255, 255, 255, 255))
+    d.text((110, 76), "online", font=status_font, fill=(190, 190, 190, 255))
+
 
 def render_whatsapp_overlays(
     out_dir: Path,
@@ -116,9 +147,7 @@ def render_whatsapp_overlays(
 ) -> List[Path]:
     """
     For each message k, produces 4 overlays:
-      overlay_01_typ1.png, overlay_01_typ2.png, overlay_01_typ3.png, overlay_01.png
-      overlay_02_typ1.png, ...
-    Returns overlays in that exact order.
+      overlay_01_typ1.png, overlay_01_typ2.png, overlay_01_typ3.png, overlay_01.png ...
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -126,21 +155,26 @@ def render_whatsapp_overlays(
     msg_font = _font(font_path, 44)
     time_font = _font(font_path, 30)
 
-    # Bubble colors
     left_bg = (245, 245, 245, 235)
     left_fg = (25, 25, 25, 255)
 
     right_bg = (26, 115, 56, 230)
     right_fg = (255, 255, 255, 255)
 
-    # Layout constants
     x_left = 60
     x_right = 520
-    y0 = 140
+    y0 = 160  # start lower because we now have header bar
     gap = 145
     radius = 28
     pad_x = 28
     pad_y = 18
+
+    # Per-video theme seed (must change each run)
+    theme_seed = random.randint(1, 10_000_000)
+
+    # Pick two persona names (A and B) each run
+    a_name, a_avatar = random.choice(PERSONAS)
+    b_name, b_avatar = random.choice([p for p in PERSONAS if p[0] != a_name])
 
     def wrap_lines(d: ImageDraw.ImageDraw, text: str, max_w: int) -> List[str]:
         words = (text or "").strip().split()
@@ -210,18 +244,21 @@ def render_whatsapp_overlays(
             x = cx0 + i * gapx
             d.ellipse([x - r, cy - r, x + r, cy + r], fill=col)
 
-    def draw_screen(
-        num_msgs_visible: int,
-        typing_for_index: Optional[int],
-        dots_on: int,
-        theme_seed: int,
-    ) -> Image.Image:
+    def draw_screen(num_msgs_visible: int, typing_for_index: Optional[int], dots_on: int) -> Image.Image:
         img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
 
         _draw_whatsapp_theme(d, W, chat_h, theme_seed)
 
-        d.text((50, 25), "WhatsApp", font=header_font, fill=(255, 255, 255, 235))
+        # Header: who are we "chatting with"?
+        # If typing for INNER (we map INNER to B visually), show Inner Voice name sometimes
+        header_name = b_name
+        header_avatar = b_avatar
+        if typing_for_index is not None and typing_for_index < len(msgs):
+            # if next speaker is B, show B; otherwise show B anyway
+            pass
+
+        _draw_header(img, header_name, header_avatar, seed=theme_seed, font_path=font_path)
 
         y = y0
         for i in range(num_msgs_visible):
@@ -234,18 +271,17 @@ def render_whatsapp_overlays(
         return img
 
     overlays: List[Path] = []
-    theme_seed = random.randint(1, 10_000_000)  # one theme per video
 
     for k in range(len(msgs)):
-        # 3 typing frames
+        # typing frames
         for frame, dots_on in enumerate([1, 2, 3], start=1):
-            img_t = draw_screen(num_msgs_visible=k, typing_for_index=k, dots_on=dots_on, theme_seed=theme_seed)
+            img_t = draw_screen(num_msgs_visible=k, typing_for_index=k, dots_on=dots_on)
             p_t = out_dir / f"overlay_{k+1:02d}_typ{frame}.png"
             img_t.save(p_t)
             overlays.append(p_t)
 
         # full frame
-        img_f = draw_screen(num_msgs_visible=k + 1, typing_for_index=None, dots_on=3, theme_seed=theme_seed)
+        img_f = draw_screen(num_msgs_visible=k + 1, typing_for_index=None, dots_on=3)
         p_f = out_dir / f"overlay_{k+1:02d}.png"
         img_f.save(p_f)
         overlays.append(p_f)
