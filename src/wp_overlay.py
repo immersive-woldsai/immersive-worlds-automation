@@ -28,19 +28,25 @@ def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
     except Exception:
         return ImageFont.load_default()
 
+def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int, theme_seed: int):
+    rng = random.Random(theme_seed)
+    base_rgb, alpha = rng.choice(THEMES)
 
-def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int):
-    # Dark WhatsApp-like background (NOT pure black)
-    d.rectangle([0, 0, W, chat_h], fill=(18, 24, 28, 255))
+    d.rectangle([0, 0, W, chat_h], fill=(*base_rgb, 255))
 
-    # subtle doodle pattern
-    step = 92
-    col = (255, 255, 255, 18)
+    # pattern yoğunluğu da hafif random
+    step = rng.choice([84, 92, 100])
+    col = (255, 255, 255, alpha)
+
     for y in range(0, chat_h + step, step):
         for x in range(0, W + step, step):
-            d.ellipse([x + 12, y + 18, x + 32, y + 38], outline=col, width=2)
-            d.arc([x + 40, y + 10, x + 82, y + 52], start=0, end=220, fill=col, width=2)
-            d.line([x + 10, y + 60, x + 70, y + 60], fill=col, width=2)
+            # biraz da şekil varyasyonu
+            offx = rng.randint(-6, 6)
+            offy = rng.randint(-6, 6)
+            d.ellipse([x + 12 + offx, y + 18 + offy, x + 32 + offx, y + 38 + offy], outline=col, width=2)
+            d.arc([x + 40 + offx, y + 10 + offy, x + 82 + offx, y + 52 + offy], start=0, end=rng.choice([200, 220, 240]), fill=col, width=2)
+            d.line([x + 10 + offx, y + 60 + offy, x + 70 + offx, y + 60 + offy], fill=col, width=2)
+
 
 
 def render_whatsapp_overlays(
@@ -155,11 +161,11 @@ def render_whatsapp_overlays(
             x = cx0 + i * gapx
             d.ellipse([x - r, cy - r, x + r, cy + r], fill=col)
 
-    def draw_screen(num_msgs_visible: int, typing_for_index: int | None, dots_on: int = 3) -> Image.Image:
+   def draw_screen(num_msgs_visible: int, typing_for_index: int | None, dots_on: int = 3, theme_seed: int = 0) -> Image.Image:
         img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
 
-        _draw_whatsapp_theme(d, W, chat_h)
+        _draw_whatsapp_theme(d, W, chat_h, theme_seed=theme_seed)
         d.text((50, 25), "WhatsApp", font=header_font, fill=(255, 255, 255, 235))
 
         y = y0
@@ -173,17 +179,17 @@ def render_whatsapp_overlays(
         return img
 
     overlays: List[Path] = []
-
+    theme_seed = random.randint(1, 10_000_000)
     for k in range(len(msgs)):
         # 3 typing frames (1 dot, 2 dots, 3 dots)
         for frame, dots_on in enumerate([1, 2, 3], start=1):
-            img_t = draw_screen(num_msgs_visible=k, typing_for_index=k, dots_on=dots_on)
+            img_t = draw_screen(num_msgs_visible=k, typing_for_index=k, dots_on=dots_on,theme_seed=theme_seed)
             p_t = out_dir / f"overlay_{k+1:02d}_typ{frame}.png"
             img_t.save(p_t)
             overlays.append(p_t)
 
         # full frame
-        img_f = draw_screen(num_msgs_visible=k+1, typing_for_index=None)
+        img_f = draw_screen(num_msgs_visible=k+1, typing_for_index=None,theme_seed=theme_seed)
         p_f = out_dir / f"overlay_{k+1:02d}.png"
         img_f.save(p_f)
         overlays.append(p_f)
