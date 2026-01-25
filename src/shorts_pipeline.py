@@ -129,53 +129,83 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
     return title, out
 
 
-def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_wav: Path, out_mp4: Path):
+def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_wav: Path, out_mp4: Path, chat_h: int = 980):
     """
-    bg video: silent
-    overlays: overlay_01..overlay_05 (cumulative chat states)
-    times: [t1, t2, t3, t4, t5] start times
+    bg video: only in bottom area (below chat_h)
+    overlays: PNG overlays (full-size 1080x1920 with alpha)
+    times: start time for each overlay (same length as overlays)
+    audio_wav: only voices
     """
-    # Base video input (force 35 sec, mute)
-    cmd = ["ffmpeg","-y","-hide_banner","-loglevel","error",
-           "-stream_loop","0","-i", str(bg_mp4)]
+    assert len(overlays) == len(times), "overlays and times must have same length"
 
-    # Overlay inputs
+    # Inputs
+    cmd = [
+        "ffmpeg", "-y",
+        "-hide_banner", "-loglevel", "error",
+        "-stream_loop", "0", "-i", str(bg_mp4)
+    ]
+
     for p in overlays:
         cmd += ["-i", str(p)]
 
-    # Audio input
     cmd += ["-i", str(audio_wav)]
 
-    # filter: scale/crop bg then overlay each png with enable between
-    # overlays are cumulative so each one takes over from its time to end
-    vf = []
-    vf.append("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=contrast=1.03:saturation=1.05[base]")
+    # -------------------------
+    # FILTER GRAPH
+    # -------------------------
+    # 0:v -> scale/crop to bottom height, then pad to full 1080x1920 at y=chat_h
+    bottom_h = 1920 - chat_h
 
+    vf = []
+    vf.append(
+        f"[0:v]"
+        f"scale=1080:{bottom_h}:force_original_aspect_ratio=increase,"
+        f"crop=1080:{bottom_h},"
+        f"eq=contrast=1.05:saturation=1.10"
+        f"[v0]"
+    )
+    vf.append(
+        f"[v0]pad=1080:1920:0:{chat_h}:color=black[base]"
+    )
+
+    # Overlay chain
     cur = "base"
-    for i, (p, t_start) in enumerate(zip(overlays, times), start=1):
-        # overlay i is input i (since input0 is bg)
+    for i, t_start in enumerate(times, start=1):
+        # overlay inputs start at index 1
         in_idx = i
         out_lbl = f"v{i}"
-        # show overlay i from its start time to end
-        vf.append(f"[{cur}][{in_idx}:v]overlay=0:0:enable=between(t\\,{t_start}\\,{DURATION})[{out_lbl}]")
+
+        # IMPORTANT: enable without quotes, escape commas for safety
+        # show overlay from its start time to end
+        vf.append(
+            f"[{cur}][{in_idx}:v]"
+            f"overlay=0:0:enable=between(t\\,{t_start:.3f}\\,{float(DURATION):.3f})"
+            f"[{out_lbl}]"
+        )
         cur = out_lbl
 
     filter_complex = ";".join(vf)
 
-    # map video + map audio
-    # Ensure 35 sec video, audio padded already in audio builder.
+    # Map video + audio (audio is last input)
+    audio_idx = len(overlays) + 1
+
     cmd += [
         "-filter_complex", filter_complex,
         "-map", f"[{cur}]",
-        "-map", f"{len(overlays)+1}:a",
+        "-map", f"{audio_idx}:a",
         "-t", str(DURATION),
-        "-c:v","libx264","-preset","veryfast","-crf","22","-pix_fmt","yuv420p",
-        "-c:a","aac","-b:a","160k",
-        "-movflags","+faststart",
-        str(out_mp4)
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "22",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "160k",
+        "-movflags", "+faststart",
+        str(out_mp4),
     ]
 
     run(cmd)
+
 
 
 def main():
@@ -200,12 +230,12 @@ def main():
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
         times = []
         for l in lines:
-            t0 = max(0.0, l.t - 0.40)
-            times.append(t0)        # typ1
-            times.append(t0 + 0.10) # typ2
-            times.append(t0 + 0.20) # typ3
-            times.append(t0 + 0.30) # typ4
-            times.append(l.t)       # full
+            t0 = max(0.0, l.t - 0.30)
+            times.append(t0)           # typ1
+            times.append(t0 + 0.10)    # typ2
+            times.append(t0 + 0.20)    # typ3
+            times.append(l.t)          # full
+
 
 
 
