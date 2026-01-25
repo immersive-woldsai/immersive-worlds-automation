@@ -1,15 +1,21 @@
-name: Immersive Worlds — Shorts (2/day)
+name: Immersive Worlds — Shorts (3/day)
 
 on:
   schedule:
     - cron: "0 18 * * *"
-    - cron: "0 20 * * *"
+    - cron: "40 18 * * *"
+    - cron: "20 19 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: immersive-shorts
+  cancel-in-progress: false
 
 jobs:
   shorts:
     runs-on: ubuntu-latest
     timeout-minutes: 240
+
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +40,6 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
 
-          # always valid
           YT_DEFAULT_PRIVACY: "public"
           SHORTS_SECONDS: "35"
           SHORTS_FEMALE_SPEAKER: "p225"
