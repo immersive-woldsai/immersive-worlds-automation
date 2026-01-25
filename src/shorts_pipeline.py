@@ -21,8 +21,8 @@ if PRIVACY not in ("public", "unlisted", "private"):
     PRIVACY = "public"
 
 FEMALE_SPK = os.getenv("SHORTS_FEMALE_SPEAKER", "p225")
-MALE_SPK   = os.getenv("SHORTS_MALE_SPEAKER", "p226")
-INNER_SPK  = os.getenv("SHORTS_INNER_SPEAKER", "p225")
+MALE_SPK = os.getenv("SHORTS_MALE_SPEAKER", "p226")
+INNER_SPK = os.getenv("SHORTS_INNER_SPEAKER", "p225")
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
@@ -79,7 +79,6 @@ CLIFF = [
 
 
 def _hhmm(base: datetime, add_min: int) -> str:
-    # Runner linux: %-I works. If ever fails, change to %I and strip leading zero.
     return (base + timedelta(minutes=add_min)).strftime("%-I:%M %p")
 
 
@@ -119,9 +118,8 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
             ("A", cliff),
         ]
 
-    # timeline: 35 sec
+    # timeline (senin ayarın)
     appear = [0.9, 4.2, 7.2, 11.6, 14.9]
-
 
     out: List[TimedLine] = []
     for i, ((who, text), t) in enumerate(zip(lines, appear)):
@@ -129,20 +127,27 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
     return title, out
 
 
-def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_wav: Path, out_mp4: Path, chat_h: int = 980):
+def render_final(
+    bg_mp4: Path,
+    overlays: List[Path],
+    times: List[float],
+    audio_wav: Path,
+    out_mp4: Path,
+    chat_h: int = 860,
+):
     """
     bg video: only in bottom area (below chat_h)
     overlays: PNG overlays (full-size 1080x1920 with alpha)
-    times: start time for each overlay (same length as overlays)
-    audio_wav: only voices
+    times: start time for each overlay
+    audio: ONLY voices
     """
     assert len(overlays) == len(times), "overlays and times must have same length"
 
-    # Inputs
     cmd = [
         "ffmpeg", "-y",
         "-hide_banner", "-loglevel", "error",
-        "-stream_loop", "0", "-i", str(bg_mp4)
+        # ✅ loop background forever, then cut with -t
+        "-stream_loop", "-1", "-i", str(bg_mp4),
     ]
 
     for p in overlays:
@@ -150,10 +155,6 @@ def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_w
 
     cmd += ["-i", str(audio_wav)]
 
-    # -------------------------
-    # FILTER GRAPH
-    # -------------------------
-    # 0:v -> scale/crop to bottom height, then pad to full 1080x1920 at y=chat_h
     bottom_h = 1920 - chat_h
 
     vf = []
@@ -164,19 +165,12 @@ def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_w
         f"eq=contrast=1.05:saturation=1.10"
         f"[v0]"
     )
-    vf.append(
-        f"[v0]pad=1080:1920:0:{chat_h}:color=black[base]"
-    )
+    vf.append(f"[v0]pad=1080:1920:0:{chat_h}:color=black[base]")
 
-    # Overlay chain
     cur = "base"
     for i, t_start in enumerate(times, start=1):
-        # overlay inputs start at index 1
         in_idx = i
         out_lbl = f"v{i}"
-
-        # IMPORTANT: enable without quotes, escape commas for safety
-        # show overlay from its start time to end
         vf.append(
             f"[{cur}][{in_idx}:v]"
             f"overlay=0:0:enable=between(t\\,{t_start:.3f}\\,{float(DURATION):.3f})"
@@ -186,7 +180,6 @@ def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_w
 
     filter_complex = ";".join(vf)
 
-    # Map video + audio (audio is last input)
     audio_idx = len(overlays) + 1
 
     cmd += [
@@ -207,40 +200,36 @@ def render_final(bg_mp4: Path, overlays: List[Path], times: List[float], audio_w
     run(cmd)
 
 
-
 def main():
     try:
         verify_auth()
 
-        # 1) BG video download (real satisfying), will be used silently
+        # 1) BG video
         bg = OUT / "bg.mp4"
         download_bg_from_pexels(bg)
 
         # 2) Chat
         title, lines = generate_chat()
 
-        # 3) WhatsApp overlays (cumulative states)
-        wp_msgs = [WpMsg(who=("A" if l.who=="A" else "B"), text=l.text, hhmm=l.hhmm) for l in lines]
-        # For INNER we still show it as right bubble (B-like)
+        # 3) WhatsApp overlays
+        wp_msgs = [WpMsg(who=("A" if l.who == "A" else "B"), text=l.text, hhmm=l.hhmm) for l in lines]
         for i in range(len(wp_msgs)):
             if lines[i].who == "INNER":
                 wp_msgs[i].who = "B"
 
         overlay_dir = OUT / "overlays"
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
-        times = []
+
+        # Typing total 0.90s => typ1/typ2/typ3 each 0.30s, then full
+        times: List[float] = []
         for l in lines:
             t0 = max(0.0, l.t - 0.90)
-            times.append(t0)           # typ1
-            times.append(t0 + 0.30)    # typ2
-            times.append(t0 + 0.60)    # typ3
-            times.append(l.t)          # full
+            times.append(t0)         # typ1
+            times.append(t0 + 0.30)  # typ2
+            times.append(t0 + 0.60)  # typ3
+            times.append(l.t)        # full
 
-
-
-
-
-        # 4) TTS per message + timeline audio (ONLY voices)
+        # 4) TTS audio timeline (ONLY voices)
         tts_dir = OUT / "tts"
         tts_dir.mkdir(exist_ok=True)
 
@@ -253,14 +242,16 @@ def main():
                 spk = MALE_SPK
             else:
                 spk = INNER_SPK
+
             tts_to_wav(l.text, wav, speaker=spk)
-            # Slight delay so message appears then voice starts (more WhatsApp feel)
-            wav_items.append((l.t + 0.10, wav))
+
+            # ✅ voice almost immediately after message appears
+            wav_items.append((l.t + 0.03, wav))
 
         audio = OUT / "chat_audio.wav"
         build_timeline_audio(wav_items, audio, total_sec=DURATION)
 
-        # 5) Render final mp4 (bg muted, overlays, voice)
+        # 5) Render final mp4
         mp4 = OUT / "short.mp4"
         render_final(bg, overlays, times, audio, mp4, chat_h=860)
 
@@ -272,7 +263,7 @@ def main():
             video_file=str(mp4),
             title=title,
             description=description,
-            tags=["shorts","chat","texting","story","satisfying","viral","psychology"],
+            tags=["shorts", "chat", "texting", "story", "satisfying", "viral", "psychology"],
             privacy_status=PRIVACY,
             category_id="22",
             language="en",
