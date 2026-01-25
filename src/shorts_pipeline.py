@@ -120,7 +120,8 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
         ]
 
     # timeline: 35 sec
-    appear = [2.0, 7.0, 14.0, 22.0, 29.0]
+    appear = [0.1, 1.6, 3.8, 6.1, 7.5]
+
 
     out: List[TimedLine] = []
     for i, ((who, text), t) in enumerate(zip(lines, appear)):
@@ -199,11 +200,13 @@ def main():
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
         times = []
         for l in lines:
-            t0 = max(0.0, l.t - 0.6)      # typing start (0.6sn)
-            times.append(t0)              # typ1
-            times.append(t0 + 0.2)        # typ2
-            times.append(t0 + 0.4)        # typ3
-            times.append(l.t)             # full
+            t0 = max(0.0, l.t - 0.40)
+            times.append(t0)        # typ1
+            times.append(t0 + 0.10) # typ2
+            times.append(t0 + 0.20) # typ3
+            times.append(t0 + 0.30) # typ4
+            times.append(l.t)       # full
+
 
 
         # 4) TTS per message + timeline audio (ONLY voices)
@@ -221,7 +224,7 @@ def main():
                 spk = INNER_SPK
             tts_to_wav(l.text, wav, speaker=spk)
             # Slight delay so message appears then voice starts (more WhatsApp feel)
-            wav_items.append((l.t + 0.25, wav))
+            wav_items.append((l.t + 0.10, wav))
 
         audio = OUT / "chat_audio.wav"
         build_timeline_audio(wav_items, audio, total_sec=DURATION)
