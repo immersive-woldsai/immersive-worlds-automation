@@ -6,16 +6,16 @@ import subprocess
 
 PEXELS_API = "https://api.pexels.com/videos/search"
 
-# “Çocuksu olmasın” + loop izlettiren türler
 PEXELS_QUERIES = [
     "oddly satisfying close up",
     "soap cutting asmr",
     "kinetic sand close up",
     "slime satisfying macro",
-    "woodworking close up",
     "metal polishing macro",
-    "craft hands close up",
-    "calming process close up",
+    "woodworking close up",
+    "paint mixing macro",
+    "ink in water macro",
+    "resin art close up",
 ]
 
 def ffprobe_duration(path: Path) -> float:
@@ -26,13 +26,36 @@ def ffprobe_duration(path: Path) -> float:
     )
     return float(r.stdout.strip())
 
+def _download(url: str, out_path: Path, timeout: int = 180) -> None:
+    if out_path.exists():
+        out_path.unlink()
+
+    with requests.get(url, stream=True, timeout=timeout) as rr:
+        rr.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in rr.iter_content(1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
 def download_bg_from_pexels(out_path: Path) -> Path:
+    """
+    Robust downloader:
+    - Accepts >= 6s clips (we will loop to 35s anyway)
+    - Accepts small files too (>= 700KB)
+    - If Pexels fails completely, uses local fallback if exists.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # fallback (optional)
+    fallback = Path("assets/fallback_bg.mp4")
+
     key = os.environ["PEXELS_API_KEY"]
     headers = {"Authorization": key}
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    min_dur = int(os.getenv("PEXELS_MIN_DUR", "6"))              # seconds
+    min_bytes = int(os.getenv("PEXELS_MIN_BYTES", "700000"))     # ~0.7MB
 
-    for attempt in range(1, 9):
+    for attempt in range(1, 10):
         q = random.choice(PEXELS_QUERIES)
         print(f"[BG] Search attempt {attempt} query='{q}'", flush=True)
 
@@ -49,12 +72,12 @@ def download_bg_from_pexels(out_path: Path) -> Path:
 
         random.shuffle(videos)
 
-        for v in videos[:10]:
+        for v in videos[:12]:
             files = v.get("video_files", [])
             if not files:
                 continue
 
-            # portrait ve en az 720p olanları hedefle
+            # Prefer portrait and decent height, but don't be too strict
             cand = []
             for f in files:
                 w = f.get("width") or 0
@@ -63,40 +86,39 @@ def download_bg_from_pexels(out_path: Path) -> Path:
                 size = f.get("file_size") or 0
                 if not link:
                     continue
-                if h > w and h >= 720:
-                    # 9:16'ya yakın + orta boy hedef
-                    cand.append((abs((w / h) - (9 / 16)), size, link, w, h))
+                if h > w and h >= 720:  # portrait-ish
+                    # aspect closeness + size hint
+                    cand.append((abs((w / h) - (9 / 16)), 0 if size == 0 else abs(size - 8_000_000), link, w, h, size))
 
             if not cand:
                 continue
 
-            # en iyi aspect ratio yakın olanları, dosya boyutu ~8-20MB arası hedefle
-            cand.sort(key=lambda x: (x[0], 0 if x[1] == 0 else abs(x[1] - 12_000_000)))
+            cand.sort(key=lambda x: (x[0], x[1]))
 
-            for _, _, url, w, h in cand[:3]:
+            for _, __, url, w, h, size_hint in cand[:4]:
                 try:
                     print(f"[BG] Trying {w}x{h} ({url[:60]}...)", flush=True)
-                    if out_path.exists():
-                        out_path.unlink()
+                    _download(url, out_path)
 
-                    with requests.get(url, stream=True, timeout=180) as rr:
-                        rr.raise_for_status()
-                        with open(out_path, "wb") as f:
-                            for chunk in rr.iter_content(1024 * 1024):
-                                if chunk:
-                                    f.write(chunk)
-
-                    if not out_path.exists() or out_path.stat().st_size < 2_000_000:
-                        print("[WARN] BG too small, retry...", flush=True)
+                    if not out_path.exists():
                         continue
 
-                    dur = ffprobe_duration(out_path)
-                    # 35 sn için 40+ daha stabil
-                    if dur < 6:
+                    actual = out_path.stat().st_size
+                    if actual < min_bytes:
+                        print(f"[WARN] BG too small ({actual} bytes), retry...", flush=True)
+                        continue
+
+                    try:
+                        dur = ffprobe_duration(out_path)
+                    except Exception as e:
+                        print(f"[WARN] ffprobe failed: {e}, retry...", flush=True)
+                        continue
+
+                    if dur < min_dur:
                         print(f"[WARN] BG too short ({dur:.1f}s), retry...", flush=True)
                         continue
 
-                    print(f"[OK] BG ready: {out_path} ({dur:.1f}s)", flush=True)
+                    print(f"[OK] BG ready: {out_path} ({dur:.1f}s, {actual} bytes)", flush=True)
                     return out_path
 
                 except Exception as e:
@@ -105,4 +127,10 @@ def download_bg_from_pexels(out_path: Path) -> Path:
 
         print("[WARN] No valid BG this attempt, retrying...", flush=True)
 
-    raise RuntimeError("Failed to download a valid satisfying portrait background from Pexels.")
+    # If all failed, fallback
+    if fallback.exists():
+        print("[WARN] Pexels failed; using fallback assets/fallback_bg.mp4", flush=True)
+        out_path.write_bytes(fallback.read_bytes())
+        return out_path
+
+    raise RuntimeError("Failed to download a valid satisfying portrait background from Pexels (and no fallback).")
