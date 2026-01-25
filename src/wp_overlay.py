@@ -4,6 +4,20 @@ from typing import List, Optional
 import random
 
 from PIL import Image, ImageDraw, ImageFont
+CHAT_PROFILES = {
+    "A": {
+        "name": "Alex",
+        "avatar": "assets/avatars/a.png"
+    },
+    "B": {
+        "name": "Maya",
+        "avatar": "assets/avatars/b.png"
+    },
+    "INNER": {
+        "name": "Inner Voice",
+        "avatar": "assets/avatars/inner.png"
+    }
+}
 
 PATTERN_STYLES = [
     "none",       # düz – premium
@@ -31,6 +45,21 @@ THEMES = [
     ((30, 35, 40), 16),   # gray-ish
 ]
 
+def draw_header(draw, img, who, font):
+    profile = CHAT_PROFILES[who]
+
+    # bar
+    draw.rectangle([0, 0, 1080, 120], fill=(18, 18, 18, 255))
+
+    # avatar
+    avatar = Image.open(profile["avatar"]).convert("RGBA").resize((64, 64))
+    img.paste(avatar, (30, 28), avatar)
+
+    # name
+    draw.text((120, 38), profile["name"], font=font, fill=(255,255,255,255))
+
+    # status
+    draw.text((120, 72), "online", font=_font(FONT, 26), fill=(180,180,180,255))
 
 def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int, theme_seed: int) -> None:
     rng = random.Random(theme_seed)
