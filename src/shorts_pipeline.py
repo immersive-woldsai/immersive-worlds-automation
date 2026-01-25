@@ -120,7 +120,7 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
         ]
 
     # timeline: 35 sec
-    appear = [0.9, 3.8, 7.0, 10.6, 14.0]
+    appear = [0.9, 4.2, 7.2, 11.6, 14.9]
 
 
     out: List[TimedLine] = []
