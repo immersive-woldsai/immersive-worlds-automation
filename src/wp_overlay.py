@@ -5,7 +5,9 @@ import random
 
 from PIL import Image, ImageDraw, ImageFont
 
-
+PATTERN_STYLES = [
+    "none",       # düz – premium
+]
 @dataclass
 class Msg:
     who: str   # "A" left, "B" right
