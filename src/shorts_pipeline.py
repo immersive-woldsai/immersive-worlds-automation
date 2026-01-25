@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple
+from src.topic_weights import generate_chat_script
 
 from src.youtube_upload import upload_video, verify_auth
 from src.pexels_bg import download_bg_from_pexels
@@ -97,13 +98,52 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
     base = datetime.utcnow()
 
     two_person = random.random() < 0.7
-    hook = random.choice(TOPIC_HOOKS)
-    conf = random.choice(CONFESSIONS)
-    twist = random.choice(TWISTS)
-    cliff = random.choice(CLIFF)
 
+    # topic-weighted content
+    topic, hook, conf, twist, cliff = generate_chat_script()
+
+    # Title templates (SEO-friendly but natural)
+    TITLE_TEMPLATES = {
+        "relationship_ghosting": [
+            "I Almost Sent This Text…",
+            "This Reply Hurt More Than Silence",
+            "I Was Waiting For This Message",
+        ],
+        "self_respect_boundaries": [
+            "This Is Where I Drew The Line",
+            "I Finally Said No",
+            "This Message Changed Me",
+        ],
+        "overthinking_anxiety": [
+            "My Brain Wouldn’t Let This Go",
+            "This Text Ruined My Night",
+            "I Couldn’t Stop Overthinking This",
+        ],
+        "psychology_attachment": [
+            "This Is Why Letting Go Is Hard",
+            "Attachment Makes This So Confusing",
+            "This Explained Everything",
+        ],
+        "late_night_confession": [
+            "I Almost Sent This At 2AM",
+            "This Was Hard To Admit",
+            "I Shouldn’t Have Typed This",
+        ],
+        "friendship_betrayal": [
+            "I Didn’t Expect This From Them",
+            "This Hurt More Than I Admit",
+            "This Wasn’t Supposed To Happen",
+        ],
+    }
+
+    # fallback title
+    title = "I Almost Sent This Text…"
+
+    if topic in TITLE_TEMPLATES:
+        title = random.choice(TITLE_TEMPLATES[topic])
+
+    # Build chat
     if two_person:
-        title = "I almost sent this..."
         lines = [
             ("A", hook),
             ("B", "Say it."),
@@ -112,7 +152,6 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
             ("A", cliff),
         ]
     else:
-        title = "My inner voice said this..."
         lines = [
             ("A", hook),
             ("INNER", "Don't send it."),
@@ -121,13 +160,22 @@ def generate_chat() -> Tuple[str, List[TimedLine]]:
             ("A", cliff),
         ]
 
-    # timeline (senin ayarın)
+    # Timeline (35s total – optimized pacing)
     appear = [0.9, 4.2, 7.2, 11.6, 14.9]
 
     out: List[TimedLine] = []
     for i, ((who, text), t) in enumerate(zip(lines, appear)):
-        out.append(TimedLine(who=who, text=text, t=t, hhmm=_hhmm(base, i)))
+        out.append(
+            TimedLine(
+                who=who,
+                text=text,
+                t=t,
+                hhmm=_hhmm(base, i),
+            )
+        )
+
     return title, out
+
 
 
 def render_final(
