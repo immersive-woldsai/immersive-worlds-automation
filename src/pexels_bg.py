@@ -92,7 +92,7 @@ def download_bg_from_pexels(out_path: Path) -> Path:
 
                     dur = ffprobe_duration(out_path)
                     # 35 sn için 40+ daha stabil
-                    if dur < 7:
+                    if dur < 6:
                         print(f"[WARN] BG too short ({dur:.1f}s), retry...", flush=True)
                         continue
 
