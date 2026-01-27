@@ -9,6 +9,7 @@ jobs:
   long:
     runs-on: ubuntu-latest
     timeout-minutes: 240
+
     steps:
       - uses: actions/checkout@v4
 
@@ -32,10 +33,30 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           YT_DEFAULT_PRIVACY: ${{ secrets.YT_DEFAULT_PRIVACY }}
+          # opsiyonel:
+          # LONG_MINUTES: "60"
+          # LONG_SPEAKER: "p225"
+          # YT_NOTIFY_SUBSCRIBERS: "false"
         run: |
           set -euxo pipefail
+
           echo "=== COMMIT ==="
           git rev-parse HEAD
+
+          echo "=== ENV (sanity) ==="
+          python -c "import os; print('RAW YT_DEFAULT_PRIVACY =', repr(os.getenv('YT_DEFAULT_PRIVACY')))"
+
+          # Normalize privacy (strip newlines + lowercase) and validate
+          export YT_DEFAULT_PRIVACY="$(printf "%s" "${YT_DEFAULT_PRIVACY:-public}" | tr -d '\r\n' | tr '[:upper:]' '[:lower:]')"
+          case "$YT_DEFAULT_PRIVACY" in
+            public|private|unlisted) ;;
+            *)
+              echo "ERROR: Invalid YT_DEFAULT_PRIVACY='$YT_DEFAULT_PRIVACY' (must be public/private/unlisted)"
+              exit 1
+              ;;
+          esac
+          echo "Normalized YT_DEFAULT_PRIVACY=$YT_DEFAULT_PRIVACY"
+
           echo "=== RUN ==="
           python -u -m src.run_pipeline
 
