@@ -101,7 +101,6 @@ def _draw_header(img: Image.Image, name: str, avatar_path: str, seed: int, font_
     bar_h = 120
 
     d.rectangle([0, 0, 1080, bar_h], fill=(14, 18, 20, 255))
-
     _paste_avatar(img, avatar_path, x=26, y=28, size=64, fallback_name=name, seed=seed, font_path=font_path)
 
     name_font = _font(font_path, 40)
@@ -245,6 +244,6 @@ def render_whatsapp_overlays(
     return overlays
 
 
-# Backward compatibility aliases (in case some file imports old names)
-render_whatsapp_overlay = render_whatsapp_overlays  # just in case someone used singular
+# Compatibility aliases
+render_whatsapp_overlay = render_whatsapp_overlays
 __all__ = ["Msg", "render_whatsapp_overlays", "render_whatsapp_overlay"]
