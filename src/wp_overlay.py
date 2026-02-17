@@ -10,7 +10,6 @@ from src.topic_weights import generate_chat_script
 from src.youtube_upload import upload_video, verify_auth
 from src.pexels_bg import download_bg_from_pexels
 from src.shorts_audio import tts_to_wav, build_timeline_audio
-from src.wp_overlay import render_whatsapp_overlays, Msg as WpMsg
 
 OUT = Path("out")
 OUT.mkdir(exist_ok=True)
