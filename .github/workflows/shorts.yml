@@ -41,7 +41,7 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
 
           YT_DEFAULT_PRIVACY: "public"
-          SHORTS_SECONDS: "35"
+          SHORTS_SECONDS: "22"
           SHORTS_FEMALE_SPEAKER: "p225"
           SHORTS_MALE_SPEAKER: "p226"
           SHORTS_INNER_SPEAKER: "p225"
