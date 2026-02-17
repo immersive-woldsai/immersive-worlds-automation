@@ -44,6 +44,50 @@ def cleanup_out():
         print("[WARN] cleanup failed:", e, flush=True)
 
 
+def ensure_subscribe_badge(out_png: Path) -> Path:
+    """
+    Creates a transparent PNG badge (YouTube play icon + SUBSCRIBE) if it doesn't exist.
+    No external assets needed.
+    """
+    if out_png.exists() and out_png.stat().st_size > 1000:
+        return out_png
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception as e:
+        print("[WARN] Pillow not available, skipping badge:", e, flush=True)
+        return out_png  # will not exist => overlay skipped
+
+    w, h = 420, 120
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    # rounded dark bg
+    r = 28
+    d.rounded_rectangle([0, 0, w, h], radius=r, fill=(20, 20, 20, 190))
+
+    # red play button
+    bx, by, bw, bh = 18, 18, 120, 84
+    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=22, fill=(230, 33, 23, 255))
+
+    # white play triangle
+    tri = [(bx + 46, by + 22), (bx + 46, by + 62), (bx + 84, by + 42)]
+    d.polygon(tri, fill=(255, 255, 255, 255))
+
+    # text
+    try:
+        font = ImageFont.truetype(FONT, 44)
+    except Exception:
+        font = ImageFont.load_default()
+
+    d.text((bx + bw + 18, 34), "SUBSCRIBE", font=font, fill=(255, 255, 255, 245))
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_png)
+    print("[OK] Badge created:", out_png, flush=True)
+    return out_png
+
+
 @dataclass
 class TimedLine:
     who: str
@@ -53,21 +97,18 @@ class TimedLine:
 
 
 def _hhmm(base: datetime, add_min: int) -> str:
-    # e.g. 1:05 PM
     return (base + timedelta(minutes=add_min)).strftime("%-I:%M %p")
 
 
 def generate_chat() -> Tuple[str, List[TimedLine]]:
     """
-    Uses AI pattern engine:
-    topic_weights.generate_chat_script() -> (title, raw_lines)
-      raw_lines: [("A", "..."), ("INNER", "..."), ...]
+    Expects: generate_chat_script() -> (title, raw_lines)
+      raw_lines: [("A","..."),("INNER","..."),...]
     """
     base = datetime.utcnow()
 
     title, raw_lines = generate_chat_script()
 
-    # 22-second pacing optimized for replay
     appear = [0.7, 3.5, 6.5, 11.0, 15.5]
 
     out: List[TimedLine] = []
@@ -97,8 +138,12 @@ def render_final(
     overlays: PNG overlays (full-size 1080x1920 with alpha)
     times: start time for each overlay
     audio: ONLY voices
+    + subscribe badge (left-middle) last ~2.3 sec
     """
     assert len(overlays) == len(times), "overlays and times must have same length"
+
+    badge = ensure_subscribe_badge(OUT / "subscribe_badge.png")
+    use_badge = badge.exists() and badge.stat().st_size > 1000
 
     cmd = [
         "ffmpeg", "-y",
@@ -106,9 +151,15 @@ def render_final(
         "-stream_loop", "-1", "-i", str(bg_mp4),
     ]
 
+    # WhatsApp overlay pngs
     for p in overlays:
         cmd += ["-i", str(p)]
 
+    # Subscribe badge png (optional)
+    if use_badge:
+        cmd += ["-i", str(badge)]
+
+    # Audio last
     cmd += ["-i", str(audio_wav)]
 
     bottom_h = 1920 - chat_h
@@ -123,9 +174,10 @@ def render_final(
     )
     vf.append(f"[v0]pad=1080:1920:0:{chat_h}:color=black[base]")
 
+    # Apply WhatsApp overlays
     cur = "base"
     for i, t_start in enumerate(times, start=1):
-        in_idx = i
+        in_idx = i  # overlays start from input 1
         out_lbl = f"v{i}"
         vf.append(
             f"[{cur}][{in_idx}:v]"
@@ -134,17 +186,35 @@ def render_final(
         )
         cur = out_lbl
 
-    # 🔥 SUBSCRIBE CTA (subtle, last 2.5 seconds)
-    vf.append(
-        f"[{cur}]drawtext=text='Subscribe for more...':"
-        f"fontcolor=white@0.75:fontsize=36:"
-        f"x=(w-text_w)/2:y=1850:"
-        f"enable=between(t\\,{DURATION-2.5}\\,{DURATION})"
-        f"[vfinal]"
-    )
+    # Subscribe badge overlay (left-middle)
+    # Inputs: 0 bg, 1..N overlays, (N+1) badge, last audio
+    if use_badge:
+        badge_idx = 1 + len(overlays)
+
+        # Position: left-middle (avoid WhatsApp header)
+        # You asked "sol ortada": we place it in the chat zone around mid-height.
+        x = 40
+        y = int(chat_h * 0.52)  # tweakable: 0.45-0.60
+
+        start = max(0.0, DURATION - 2.3)
+        end = float(DURATION)
+
+        vf.append(f"[{badge_idx}:v]format=rgba,scale=320:-1[badge]")
+        vf.append(
+            f"[{cur}][badge]"
+            f"overlay=x={x}:y={y}:enable=between(t\\,{start:.3f}\\,{end:.3f})"
+            f"[vfinal]"
+        )
+    else:
+        vf.append(f"[{cur}]null[vfinal]")
 
     filter_complex = ";".join(vf)
-    audio_idx = len(overlays) + 1
+
+    # audio index depends on whether badge exists
+    if use_badge:
+        audio_idx = badge_idx + 1
+    else:
+        audio_idx = len(overlays) + 1
 
     cmd += [
         "-filter_complex", filter_complex,
@@ -172,10 +242,10 @@ def main():
         bg = OUT / "bg.mp4"
         download_bg_from_pexels(bg)
 
-        # 2) Chat (title + timed lines)
+        # 2) Chat
         title, lines = generate_chat()
 
-        # 3) WhatsApp overlays (INNER is rendered as "B")
+        # 3) WhatsApp overlays (INNER rendered as B)
         wp_msgs: List[WpMsg] = []
         for l in lines:
             who = "A" if l.who == "A" else "B"
@@ -184,16 +254,16 @@ def main():
         overlay_dir = OUT / "overlays"
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
 
-        # Typing total 0.75s => typ1/typ2/typ3 each 0.25s, then full
+        # Typing timing
         times: List[float] = []
         for l in lines:
             t0 = max(0.0, l.t - 0.75)
-            times.append(t0)         # typ1
-            times.append(t0 + 0.25)  # typ2
-            times.append(t0 + 0.50)  # typ3
-            times.append(l.t)        # full
+            times.append(t0)
+            times.append(t0 + 0.25)
+            times.append(t0 + 0.50)
+            times.append(l.t)
 
-        # 4) TTS audio timeline (ONLY voices)
+        # 4) TTS audio timeline
         tts_dir = OUT / "tts"
         tts_dir.mkdir(exist_ok=True)
 
