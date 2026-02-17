@@ -1,59 +1,68 @@
 import random
 
-TOPICS = [
-    # (topic_name, weight, hooks[], confessions[], twists[], cliffs[])
-    ("relationship_ghosting", 10,
-     ["They replied... but it felt colder than silence.", "I saw their name and my stomach dropped.", "I didn't expect that message."],
-     ["I wasn't asking for love. Just clarity.", "I keep forgiving what I shouldn't.", "I hate how fast I miss people."],
-     ["Maybe you're not 'too much'. Maybe they're not enough.", "Sometimes closure is just disappointment with a caption."],
-     ["Don't ask me who. You'll know."]),
+# --- CORE EMOTION BANKS ---
 
-    ("self_respect_boundaries", 9,
-     ["I finally said no... and everything changed.", "This is what self-respect looks like.", "I stopped explaining myself."],
-     ["I was shrinking to be easier to love.", "I kept lowering my standards to avoid being alone."],
-     ["The right people don't need you to beg.", "Peace feels boring when you're addicted to chaos."],
-     ["I'm not ready to tell you what happened next."]),
-
-    ("overthinking_anxiety", 8,
-     ["My brain won't stop replaying it.", "It's 2 AM and I'm still thinking about it.", "One sentence ruined my whole night."],
-     ["I overanalyze because surprises hurt.", "I don't trust calm. I wait for the twist."],
-     ["Maybe you're not anxious. Maybe you're unsafe.", "Your body remembers what you ignore."],
-     ["If I say the last part, you'll understand everything."]),
-
-    ("psychology_attachment", 8,
-     ["People don't leave suddenly. They leave quietly first.", "Attachment is a wild thing.", "This is why you can't let go."],
-     ["I confuse intensity with love.", "I chase what won't choose me."],
-     ["Avoidants fear closeness. Anxious fear distance.", "Familiar pain feels safer than unknown peace."],
-     ["This is the part nobody teaches you."]),
-
-    ("late_night_confession", 7,
-     ["I almost sent this... then I panicked.", "This is embarrassing to admit.", "I typed it. Deleted it. Typed it again."],
-     ["I miss the idea more than the person.", "I hate how hopeful I get."],
-     ["Sometimes 'maybe' is just a soft no.", "If they wanted to, you wouldn't be guessing."],
-     ["I'm deleting this soon."]),
-
-    ("friendship_betrayal", 6,
-     ["It hurts more when it's a friend.", "I didn't expect it from them.", "That laugh felt fake."],
-     ["I defended them. They never did the same.", "I ignored the red flags because I wanted it to work."],
-     ["Loyalty isn't loud. It's consistent.", "You outgrow people when you stop accepting crumbs."],
-     ["Don't make me say their name."]),
+HOOKS = [
+    "Don't send that.",
+    "Delete it.",
+    "You’re about to ruin everything.",
+    "Why are you typing that?",
+    "You know how this ends.",
+    "This is where you always mess up.",
+    "Stop. Think.",
+    "You’re not thinking clearly.",
+    "You’re emotional again.",
+    "Don’t do this tonight."
 ]
 
-def weighted_choice():
-    total = sum(w for _, w, *_ in TOPICS)
-    r = random.uniform(0, total)
-    acc = 0
-    for item in TOPICS:
-        acc += item[1]
-        if r <= acc:
-            return item
-    return TOPICS[0]
+CONFESSIONS = [
+    "I'm tired of pretending I'm okay.",
+    "I miss them more than I should.",
+    "I hate how hopeful I get.",
+    "I keep forgiving what hurts me.",
+    "I was shrinking to be easier to love.",
+    "I confuse intensity with love.",
+    "I chase what won't choose me.",
+    "I overthink because surprises hurt.",
+    "I don't trust calm.",
+    "I keep lowering my standards."
+]
+
+INNER_ATTACK = [
+    "You’re about to embarrass yourself.",
+    "They don’t care the way you do.",
+    "You’re repeating the same mistake.",
+    "You already know the answer.",
+    "This never ends well.",
+    "You’re scared of being alone.",
+    "You don’t want them. You want validation.",
+]
+
+TWISTS = [
+    "Maybe you're not too much. Maybe they’re not enough.",
+    "Peace feels boring when you’re addicted to chaos.",
+    "Sometimes closure is just disappointment with a caption.",
+    "If they wanted to, you wouldn’t be guessing.",
+    "Familiar pain feels safer than unknown peace.",
+    "You’re not anxious. You’re attached.",
+    "Maybe silence is the answer."
+]
+
+CLIFFS = [
+    "Wait.",
+    "No.",
+    "Maybe that's the point.",
+    "…what if I don’t send it?",
+    "What if I walk away?",
+    "What if I choose myself?",
+    "And that’s when I stopped typing."
+]
 
 def generate_chat_script():
-    topic, _w, hooks, confs, twists, cliffs = weighted_choice()
-    hook = random.choice(hooks)
-    conf = random.choice(confs)
-    twist = random.choice(twists)
-    cliff = random.choice(cliffs)
+    hook = random.choice(HOOKS)
+    conf = random.choice(CONFESSIONS)
+    inner = random.choice(INNER_ATTACK)
+    twist = random.choice(TWISTS)
+    cliff = random.choice(CLIFFS)
 
-    return topic, hook, conf, twist, cliff
+    return hook, conf, inner, twist, cliff
