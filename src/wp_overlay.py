@@ -1,289 +1,300 @@
+import os
+import shutil
+import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
-import random
+from typing import List, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from src.topic_weights import generate_chat_script
+from src.youtube_upload import upload_video, verify_auth
+from src.pexels_bg import download_bg_from_pexels
+from src.shorts_audio import tts_to_wav, build_timeline_audio
+from src.wp_overlay import render_whatsapp_overlays, Msg as WpMsg
+
+OUT = Path("out")
+OUT.mkdir(exist_ok=True)
+
+# 🔥 SHORTER = HIGHER COMPLETION
+DURATION = int(os.getenv("SHORTS_SECONDS", "22"))
+
+PRIVACY = (os.getenv("YT_DEFAULT_PRIVACY", "public") or "public").strip().lower()
+if PRIVACY not in ("public", "unlisted", "private"):
+    PRIVACY = "public"
+
+FEMALE_SPK = os.getenv("SHORTS_FEMALE_SPEAKER", "p225")
+INNER_SPK = os.getenv("SHORTS_INNER_SPEAKER", "p226")
+
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+
+def run(cmd: List[str]):
+    print(" ".join(map(str, cmd)), flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def cleanup_out():
+    try:
+        for p in OUT.glob("*"):
+            if p.is_file():
+                p.unlink()
+            else:
+                shutil.rmtree(p, ignore_errors=True)
+    except Exception as e:
+        print("[WARN] cleanup failed:", e, flush=True)
+
+
+def ensure_subscribe_badge(out_png: Path) -> Path:
+    """
+    Creates a transparent PNG badge (YouTube play icon + SUBSCRIBE).
+    No external assets needed.
+    """
+    if out_png.exists() and out_png.stat().st_size > 1000:
+        return out_png
+
+    from PIL import Image, ImageDraw, ImageFont  # Pillow already used in wp_overlay
+
+    w, h = 420, 120
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    # rounded dark bg
+    r = 28
+    d.rounded_rectangle([0, 0, w, h], radius=r, fill=(20, 20, 20, 190))
+
+    # red play button
+    bx, by, bw, bh = 18, 18, 120, 84
+    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=22, fill=(230, 33, 23, 255))
+
+    # white play triangle
+    tri = [(bx + 46, by + 22), (bx + 46, by + 62), (bx + 84, by + 42)]
+    d.polygon(tri, fill=(255, 255, 255, 255))
+
+    # text
+    try:
+        font = ImageFont.truetype(FONT, 44)
+    except Exception:
+        font = ImageFont.load_default()
+
+    d.text((bx + bw + 18, 34), "SUBSCRIBE", font=font, fill=(255, 255, 255, 245))
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_png)
+    print("[OK] Badge created:", out_png, flush=True)
+    return out_png
 
 
 @dataclass
-class Msg:
-    who: str   # "A" left, "B" right
+class TimedLine:
+    who: str
     text: str
+    t: float
     hhmm: str
 
 
-def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
+def _hhmm(base: datetime, add_min: int) -> str:
+    return (base + timedelta(minutes=add_min)).strftime("%-I:%M %p")
+
+
+def generate_chat() -> Tuple[str, List[TimedLine]]:
+    """
+    Expects: generate_chat_script() -> (title, raw_lines)
+      raw_lines: [("A","..."),("INNER","..."),...]
+    """
+    base = datetime.utcnow()
+    title, raw_lines = generate_chat_script()
+
+    # 22-second pacing optimized for replay
+    appear = [0.7, 3.5, 6.5, 11.0, 15.5]
+
+    out: List[TimedLine] = []
+    for i, ((who, text), t) in enumerate(zip(raw_lines, appear)):
+        out.append(
+            TimedLine(
+                who=who,
+                text=text,
+                t=t,
+                hhmm=_hhmm(base, i),
+            )
+        )
+    return title, out
+
+
+def render_final(
+    bg_mp4: Path,
+    overlays: List[Path],
+    times: List[float],
+    audio_wav: Path,
+    out_mp4: Path,
+    chat_h: int = 860,
+):
+    """
+    bg video: only in bottom area (below chat_h)
+    overlays: PNG overlays (full-size 1080x1920 with alpha)
+    times: start time for each overlay
+    audio: ONLY voices
+    + subscribe badge (left-middle) last ~2.3 sec
+    """
+    assert len(overlays) == len(times), "overlays and times must have same length"
+
+    badge = ensure_subscribe_badge(OUT / "subscribe_badge.png")
+    use_badge = badge.exists() and badge.stat().st_size > 1000
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-hide_banner", "-loglevel", "error",
+        "-stream_loop", "-1", "-i", str(bg_mp4),
+    ]
+
+    # WhatsApp overlay pngs
+    for p in overlays:
+        cmd += ["-i", str(p)]
+
+    # Subscribe badge png (optional)
+    if use_badge:
+        cmd += ["-i", str(badge)]
+
+    # Audio last
+    cmd += ["-i", str(audio_wav)]
+
+    bottom_h = 1920 - chat_h
+
+    vf = []
+    vf.append(
+        f"[0:v]"
+        f"scale=1080:{bottom_h}:force_original_aspect_ratio=increase,"
+        f"crop=1080:{bottom_h},"
+        f"eq=contrast=1.05:saturation=1.10"
+        f"[v0]"
+    )
+    vf.append(f"[v0]pad=1080:1920:0:{chat_h}:color=black[base]")
+
+    # Apply WhatsApp overlays
+    cur = "base"
+    for i, t_start in enumerate(times, start=1):
+        in_idx = i  # overlays start from input 1
+        out_lbl = f"v{i}"
+        vf.append(
+            f"[{cur}][{in_idx}:v]"
+            f"overlay=0:0:enable=between(t\\,{t_start:.3f}\\,{float(DURATION):.3f})"
+            f"[{out_lbl}]"
+        )
+        cur = out_lbl
+
+    # Subscribe badge overlay (LEFT-MIDDLE of FULL SCREEN)
+    # Inputs: 0 bg, 1..N overlays, (N+1) badge, last audio
+    if use_badge:
+        badge_idx = 1 + len(overlays)
+
+        start = max(0.0, DURATION - 3.3)
+        end = float(DURATION)
+
+        # Smaller + clean
+        vf.append(f"[{badge_idx}:v]format=rgba,scale=280:-1[badge]")
+
+        # Position: left-middle of the entire 1080x1920
+        # y=(H-h)/2 avoids bottom and avoids most chat-bubble overlap
+        vf.append(
+            f"[{cur}][badge]"
+            f"overlay=x=40:y=(H-h)/2:enable=between(t\\,{start:.3f}\\,{end:.3f})"
+            f"[vfinal]"
+        )
+    else:
+        vf.append(f"[{cur}]null[vfinal]")
+
+    filter_complex = ";".join(vf)
+
+    # audio index depends on whether badge exists
+    if use_badge:
+        audio_idx = badge_idx + 1
+    else:
+        audio_idx = len(overlays) + 1
+
+    cmd += [
+        "-filter_complex", filter_complex,
+        "-map", "[vfinal]",
+        "-map", f"{audio_idx}:a",
+        "-t", str(DURATION),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "22",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "160k",
+        "-movflags", "+faststart",
+        str(out_mp4),
+    ]
+
+    run(cmd)
+
+
+def main():
     try:
-        return ImageFont.truetype(path, size)
-    except Exception:
-        return ImageFont.load_default()
+        verify_auth()
+
+        # 1) BG video
+        bg = OUT / "bg.mp4"
+        download_bg_from_pexels(bg)
+
+        # 2) Chat
+        title, lines = generate_chat()
+
+        # 3) WhatsApp overlays (INNER rendered as B)
+        wp_msgs: List[WpMsg] = []
+        for l in lines:
+            who = "A" if l.who == "A" else "B"
+            wp_msgs.append(WpMsg(who=who, text=l.text, hhmm=l.hhmm))
+
+        overlay_dir = OUT / "overlays"
+        overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
+
+        # Typing timing
+        times: List[float] = []
+        for l in lines:
+            t0 = max(0.0, l.t - 0.75)
+            times.append(t0)
+            times.append(t0 + 0.25)
+            times.append(t0 + 0.50)
+            times.append(l.t)
+
+        # 4) TTS audio timeline
+        tts_dir = OUT / "tts"
+        tts_dir.mkdir(exist_ok=True)
+
+        wav_items: List[Tuple[float, Path]] = []
+        for i, l in enumerate(lines, start=1):
+            wav = tts_dir / f"m{i:02d}.wav"
+            speaker = FEMALE_SPK if l.who == "A" else INNER_SPK
+            tts_to_wav(l.text, wav, speaker=speaker)
+            wav_items.append((l.t + 0.02, wav))
+
+        audio = OUT / "chat_audio.wav"
+        build_timeline_audio(wav_items, audio, total_sec=DURATION)
+
+        # 5) Render final mp4
+        mp4 = OUT / "short.mp4"
+        render_final(bg, overlays, times, audio, mp4, chat_h=860)
+
+        # 6) Upload
+        hashtags = "#shorts #relatable #innerthoughts #psychology"
+        description = f"{title}\n\n{hashtags}\n"
+
+        upload_video(
+            video_file=str(mp4),
+            title=title,
+            description=description,
+            tags=["shorts", "chat", "inner thoughts", "psychology"],
+            privacy_status=PRIVACY,
+            category_id="22",
+            language="en",
+            thumbnail_file=None,
+        )
+
+        print("[OK] Uploaded successfully.", flush=True)
+
+    finally:
+        cleanup_out()
 
 
-THEMES = [
-    ((18, 24, 28), 18),
-    ((22, 18, 28), 18),
-    ((16, 22, 18), 18),
-    ((28, 20, 18), 18),
-    ((15, 15, 18), 18),
-    ((30, 35, 40), 16),
-]
-
-PATTERN_STYLES = ["none", "dots"]
-
-# Chat header personas (change names as you like)
-PERSONAS = [
-    ("Maya", "assets/avatars/maya.png"),
-    ("Alex", "assets/avatars/alex.png"),
-    ("Sophie", "assets/avatars/sophie.png"),
-    ("Noah", "assets/avatars/noah.png"),
-    ("Lena", "assets/avatars/lena.png"),
-    ("Ethan", "assets/avatars/ethan.png"),
-]
-INNER_PERSONA = ("Inner Voice", "assets/avatars/inner.png")
-
-
-def _draw_pattern(d: ImageDraw.ImageDraw, W: int, chat_h: int, style: str, seed: int):
-    rng = random.Random(seed * 99991 + 17)
-    if style == "none":
-        return
-
-    alpha = rng.choice([10, 12, 14, 16])
-    col = (255, 255, 255, alpha)
-
-    if style == "dots":
-        step = rng.choice([70, 80, 90])
-        r = rng.choice([4, 5, 6])
-        for y in range(0, chat_h + step, step):
-            for x in range(0, W + step, step):
-                d.ellipse([x - r, y - r, x + r, y + r], fill=col)
-
-    elif style == "diagonal":
-        step = rng.choice([60, 72, 84])
-        for i in range(-chat_h, W, step):
-            d.line([i, 0, i + chat_h, chat_h], fill=col, width=2)
-
-    elif style == "waves":
-        step = rng.choice([80, 90, 100])
-        amp = rng.choice([10, 14, 18])
-        for y0 in range(50, chat_h, step):
-            points = []
-            for x in range(0, W + 1, 40):
-                y = y0 + (amp if (x // 40) % 2 == 0 else -amp)
-                points.append((x, y))
-            d.line(points, fill=col, width=2)
-
-
-def _draw_whatsapp_theme(d: ImageDraw.ImageDraw, W: int, chat_h: int, seed: int):
-    rng = random.Random(seed)
-    base_rgb, _ = rng.choice(THEMES)
-    d.rectangle([0, 0, W, chat_h], fill=(*base_rgb, 255))
-
-    style = rng.choice(PATTERN_STYLES)
-    _draw_pattern(d, W, chat_h, style=style, seed=seed)
-
-
-def _circle_avatar(img: Image.Image, x: int, y: int, size: int, name: str, seed: int, font_path: str):
-    """Fallback avatar: colored circle + first letter."""
-    rng = random.Random(seed + sum(ord(c) for c in name))
-    col = (rng.randint(60, 200), rng.randint(60, 200), rng.randint(60, 200), 255)
-
-    d = ImageDraw.Draw(img)
-    d.ellipse([x, y, x + size, y + size], fill=col)
-
-    letter = (name[:1] or "?").upper()
-    f = _font(font_path, 34)
-    w = d.textlength(letter, font=f)
-    d.text((x + (size - w) / 2, y + 14), letter, font=f, fill=(255, 255, 255, 255))
-
-
-def _paste_avatar(img: Image.Image, avatar_path: str, x: int, y: int, size: int, fallback_name: str, seed: int, font_path: str):
-    p = Path(avatar_path)
-    if p.exists():
-        try:
-            av = Image.open(p).convert("RGBA").resize((size, size))
-            # Make it circular
-            mask = Image.new("L", (size, size), 0)
-            md = ImageDraw.Draw(mask)
-            md.ellipse([0, 0, size, size], fill=255)
-            img.paste(av, (x, y), mask)
-            return
-        except Exception:
-            pass
-
-    # fallback
-    _circle_avatar(img, x, y, size, fallback_name, seed, font_path)
-
-
-def _draw_header(img: Image.Image, name: str, avatar_path: str, seed: int, font_path: str):
-    """
-    WhatsApp-like top bar with avatar + name + online.
-    (No more plain 'WhatsApp' text.)
-    """
-    d = ImageDraw.Draw(img)
-    bar_h = 120
-
-    # bar background
-    d.rectangle([0, 0, 1080, bar_h], fill=(14, 18, 20, 255))
-
-    # avatar
-    _paste_avatar(img, avatar_path, x=26, y=28, size=64, fallback_name=name, seed=seed, font_path=font_path)
-
-    # name + status
-    name_font = _font(font_path, 40)
-    status_font = _font(font_path, 26)
-
-    d.text((110, 34), name, font=name_font, fill=(255, 255, 255, 255))
-    d.text((110, 76), "online", font=status_font, fill=(190, 190, 190, 255))
-
-
-def render_whatsapp_overlays(
-    out_dir: Path,
-    msgs: List[Msg],
-    W: int = 1080,
-    H: int = 1920,
-    chat_h: int = 980,
-    font_path: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-) -> List[Path]:
-    """
-    For each message k, produces 4 overlays:
-      overlay_01_typ1.png, overlay_01_typ2.png, overlay_01_typ3.png, overlay_01.png ...
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    header_font = _font(font_path, 42)
-    msg_font = _font(font_path, 44)
-    time_font = _font(font_path, 30)
-
-    left_bg = (245, 245, 245, 235)
-    left_fg = (25, 25, 25, 255)
-
-    right_bg = (26, 115, 56, 230)
-    right_fg = (255, 255, 255, 255)
-
-    x_left = 60
-    x_right = 520
-    y0 = 160  # start lower because we now have header bar
-    gap = 145
-    radius = 28
-    pad_x = 28
-    pad_y = 18
-
-    # Per-video theme seed (must change each run)
-    theme_seed = random.randint(1, 10_000_000)
-
-    # Pick two persona names (A and B) each run
-    a_name, a_avatar = random.choice(PERSONAS)
-    b_name, b_avatar = random.choice([p for p in PERSONAS if p[0] != a_name])
-
-    def wrap_lines(d: ImageDraw.ImageDraw, text: str, max_w: int) -> List[str]:
-        words = (text or "").strip().split()
-        lines: List[str] = []
-        cur = ""
-        for w in words:
-            test = (cur + " " + w).strip()
-            if d.textlength(test, font=msg_font) <= max_w:
-                cur = test
-            else:
-                if cur:
-                    lines.append(cur)
-                cur = w
-        if cur:
-            lines.append(cur)
-        return lines
-
-    def draw_message(d: ImageDraw.ImageDraw, m: Msg, y: int) -> None:
-        is_left = (m.who == "A")
-        bx = x_left if is_left else x_right
-        max_w = 900 if is_left else 500
-
-        lines = wrap_lines(d, m.text, max_w=max_w)
-        line_h = msg_font.size + 10
-        bubble_h = pad_y * 2 + line_h * len(lines) + 36
-        bubble_w = min(max_w + pad_x * 2, 960)
-
-        fill = left_bg if is_left else right_bg
-        fill_txt = left_fg if is_left else right_fg
-
-        box = [bx, y, bx + bubble_w, y + bubble_h]
-        d.rounded_rectangle(box, radius=radius, fill=fill)
-
-        tx = bx + pad_x
-        ty = y + pad_y
-        for ln in lines:
-            d.text((tx, ty), ln, font=msg_font, fill=fill_txt)
-            ty += line_h
-
-        time_y = y + bubble_h - 42
-        if is_left:
-            d.text((bx + pad_x, time_y), m.hhmm, font=time_font, fill=(0, 0, 0, 140))
-        else:
-            d.text((bx + pad_x, time_y), m.hhmm, font=time_font, fill=(255, 255, 255, 160))
-            d.text((bx + pad_x + 170, time_y), "✓✓", font=time_font, fill=(255, 255, 255, 160))
-
-    def draw_typing_bubble(d: ImageDraw.ImageDraw, who: str, y: int, dots_on: int) -> None:
-        is_left = (who == "A")
-        bx = x_left if is_left else x_right
-
-        bubble_h = 86
-        bubble_w = 220
-        fill = left_bg if is_left else right_bg
-        box = [bx, y, bx + bubble_w, y + bubble_h]
-        d.rounded_rectangle(box, radius=radius, fill=fill)
-
-        dot_col = left_fg if is_left else right_fg
-        dot_off = (dot_col[0], dot_col[1], dot_col[2], 90)
-
-        cx0 = bx + 60
-        cy = y + 43
-        r = 7
-        gapx = 26
-
-        for i in range(3):
-            col = dot_col if i < dots_on else dot_off
-            x = cx0 + i * gapx
-            d.ellipse([x - r, cy - r, x + r, cy + r], fill=col)
-
-    def draw_screen(num_msgs_visible: int, typing_for_index: Optional[int], dots_on: int) -> Image.Image:
-        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-
-        _draw_whatsapp_theme(d, W, chat_h, theme_seed)
-
-        # Header: who are we "chatting with"?
-        # If typing for INNER (we map INNER to B visually), show Inner Voice name sometimes
-        header_name = b_name
-        header_avatar = b_avatar
-        if typing_for_index is not None and typing_for_index < len(msgs):
-            # if next speaker is B, show B; otherwise show B anyway
-            pass
-
-        _draw_header(img, header_name, header_avatar, seed=theme_seed, font_path=font_path)
-
-        y = y0
-        for i in range(num_msgs_visible):
-            draw_message(d, msgs[i], y)
-            y += gap
-
-        if typing_for_index is not None and typing_for_index < len(msgs):
-            draw_typing_bubble(d, msgs[typing_for_index].who, y, dots_on=dots_on)
-
-        return img
-
-    overlays: List[Path] = []
-
-    for k in range(len(msgs)):
-        # typing frames
-        for frame, dots_on in enumerate([1, 2, 3], start=1):
-            img_t = draw_screen(num_msgs_visible=k, typing_for_index=k, dots_on=dots_on)
-            p_t = out_dir / f"overlay_{k+1:02d}_typ{frame}.png"
-            img_t.save(p_t)
-            overlays.append(p_t)
-
-        # full frame
-        img_f = draw_screen(num_msgs_visible=k + 1, typing_for_index=None, dots_on=3)
-        p_f = out_dir / f"overlay_{k+1:02d}.png"
-        img_f.save(p_f)
-        overlays.append(p_f)
-
-    return overlays
+if __name__ == "__main__":
+    main()
