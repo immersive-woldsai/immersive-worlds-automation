@@ -2,9 +2,10 @@ name: Immersive Worlds — Shorts (3/day)
 
 on:
   schedule:
-    - cron: "0 18 * * *"
-    - cron: "40 18 * * *"
-    - cron: "20 19 * * *"
+    - cron: "15 23 * * *"
+    - cron: "0 0 * * *"
+    - cron: "45 0 * * *"
+
   workflow_dispatch:
 
 concurrency:
