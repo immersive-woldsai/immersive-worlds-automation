@@ -297,3 +297,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ---- Export guarantee for pipeline ----
+# Some refactors/renames can break imports. This keeps the pipeline stable.
+__all__ = ["Msg", "render_whatsapp_overlays"]
