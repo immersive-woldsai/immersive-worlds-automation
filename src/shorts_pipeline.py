@@ -1,18 +1,16 @@
 import os
-import random
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple
-from src.topic_weights import generate_chat_script
 
+from src.topic_weights import generate_chat_script
 from src.youtube_upload import upload_video, verify_auth
 from src.pexels_bg import download_bg_from_pexels
 from src.shorts_audio import tts_to_wav, build_timeline_audio
 from src.wp_overlay import render_whatsapp_overlays, Msg as WpMsg
-from src.titles import generate_title
 
 OUT = Path("out")
 OUT.mkdir(exist_ok=True)
@@ -31,6 +29,7 @@ FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
 def run(cmd: List[str]):
+    print(" ".join(map(str, cmd)), flush=True)
     subprocess.run(cmd, check=True)
 
 
@@ -54,28 +53,25 @@ class TimedLine:
 
 
 def _hhmm(base: datetime, add_min: int) -> str:
+    # e.g. 1:05 PM
     return (base + timedelta(minutes=add_min)).strftime("%-I:%M %p")
 
 
-# 🔥 INNER DOMINANT STRUCTURE
-def generate_chat():
+def generate_chat() -> Tuple[str, List[TimedLine]]:
+    """
+    Uses AI pattern engine:
+    topic_weights.generate_chat_script() -> (title, raw_lines)
+      raw_lines: [("A", "..."), ("INNER", "..."), ...]
+    """
     base = datetime.utcnow()
 
-    hook, conf, inner, twist, cliff = generate_chat_script()
+    title, raw_lines = generate_chat_script()
 
-    lines = [
-        ("A", hook),
-        ("INNER", inner),
-        ("A", conf),
-        ("INNER", twist),
-        ("A", cliff),
-    ]
-
-    # 22 second pacing optimized for replay
+    # 22-second pacing optimized for replay
     appear = [0.7, 3.5, 6.5, 11.0, 15.5]
 
     out: List[TimedLine] = []
-    for i, ((who, text), t) in enumerate(zip(lines, appear)):
+    for i, ((who, text), t) in enumerate(zip(raw_lines, appear)):
         out.append(
             TimedLine(
                 who=who,
@@ -85,7 +81,6 @@ def generate_chat():
             )
         )
 
-    title = generate_title()
     return title, out
 
 
@@ -97,6 +92,13 @@ def render_final(
     out_mp4: Path,
     chat_h: int = 860,
 ):
+    """
+    bg video: only in bottom area (below chat_h)
+    overlays: PNG overlays (full-size 1080x1920 with alpha)
+    times: start time for each overlay
+    audio: ONLY voices
+    """
+    assert len(overlays) == len(times), "overlays and times must have same length"
 
     cmd = [
         "ffmpeg", "-y",
@@ -132,7 +134,7 @@ def render_final(
         )
         cur = out_lbl
 
-    # 🔥 SUBSCRIBE FADE-IN (last 2.5 seconds subtle)
+    # 🔥 SUBSCRIBE CTA (subtle, last 2.5 seconds)
     vf.append(
         f"[{cur}]drawtext=text='Subscribe for more...':"
         f"fontcolor=white@0.75:fontsize=36:"
@@ -166,12 +168,15 @@ def main():
     try:
         verify_auth()
 
+        # 1) BG video
         bg = OUT / "bg.mp4"
         download_bg_from_pexels(bg)
 
+        # 2) Chat (title + timed lines)
         title, lines = generate_chat()
 
-        wp_msgs = []
+        # 3) WhatsApp overlays (INNER is rendered as "B")
+        wp_msgs: List[WpMsg] = []
         for l in lines:
             who = "A" if l.who == "A" else "B"
             wp_msgs.append(WpMsg(who=who, text=l.text, hhmm=l.hhmm))
@@ -179,14 +184,16 @@ def main():
         overlay_dir = OUT / "overlays"
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
 
+        # Typing total 0.75s => typ1/typ2/typ3 each 0.25s, then full
         times: List[float] = []
         for l in lines:
             t0 = max(0.0, l.t - 0.75)
-            times.append(t0)
-            times.append(t0 + 0.25)
-            times.append(t0 + 0.50)
-            times.append(l.t)
+            times.append(t0)         # typ1
+            times.append(t0 + 0.25)  # typ2
+            times.append(t0 + 0.50)  # typ3
+            times.append(l.t)        # full
 
+        # 4) TTS audio timeline (ONLY voices)
         tts_dir = OUT / "tts"
         tts_dir.mkdir(exist_ok=True)
 
@@ -200,9 +207,11 @@ def main():
         audio = OUT / "chat_audio.wav"
         build_timeline_audio(wav_items, audio, total_sec=DURATION)
 
+        # 5) Render final mp4
         mp4 = OUT / "short.mp4"
         render_final(bg, overlays, times, audio, mp4, chat_h=860)
 
+        # 6) Upload
         hashtags = "#shorts #relatable #innerthoughts #psychology"
         description = f"{title}\n\n{hashtags}\n"
 
