@@ -177,7 +177,7 @@ def render_final(
     # Apply WhatsApp overlays
     cur = "base"
     for i, t_start in enumerate(times, start=1):
-        in_idx = i  # overlays start from input 1
+        in_idx = i
         out_lbl = f"v{i}"
         vf.append(
             f"[{cur}][{in_idx}:v]"
@@ -187,16 +187,13 @@ def render_final(
         cur = out_lbl
 
     # Subscribe badge overlay (left-middle)
-    # Inputs: 0 bg, 1..N overlays, (N+1) badge, last audio
     if use_badge:
         badge_idx = 1 + len(overlays)
 
-        # Position: left-middle (avoid WhatsApp header)
-        # You asked "sol ortada": we place it in the chat zone around mid-height.
         x = 40
         y = int(chat_h * 0.52)  # tweakable: 0.45-0.60
 
-        start = max(0.0, DURATION - 2.3)
+        start = max(0.0, DURATION - 3.3)
         end = float(DURATION)
 
         vf.append(f"[{badge_idx}:v]format=rgba,scale=320:-1[badge]")
@@ -210,7 +207,6 @@ def render_final(
 
     filter_complex = ";".join(vf)
 
-    # audio index depends on whether badge exists
     if use_badge:
         audio_idx = badge_idx + 1
     else:
@@ -238,14 +234,11 @@ def main():
     try:
         verify_auth()
 
-        # 1) BG video
         bg = OUT / "bg.mp4"
         download_bg_from_pexels(bg)
 
-        # 2) Chat
         title, lines = generate_chat()
 
-        # 3) WhatsApp overlays (INNER rendered as B)
         wp_msgs: List[WpMsg] = []
         for l in lines:
             who = "A" if l.who == "A" else "B"
@@ -254,7 +247,6 @@ def main():
         overlay_dir = OUT / "overlays"
         overlays = render_whatsapp_overlays(overlay_dir, wp_msgs, font_path=FONT)
 
-        # Typing timing
         times: List[float] = []
         for l in lines:
             t0 = max(0.0, l.t - 0.75)
@@ -263,7 +255,6 @@ def main():
             times.append(t0 + 0.50)
             times.append(l.t)
 
-        # 4) TTS audio timeline
         tts_dir = OUT / "tts"
         tts_dir.mkdir(exist_ok=True)
 
@@ -277,11 +268,9 @@ def main():
         audio = OUT / "chat_audio.wav"
         build_timeline_audio(wav_items, audio, total_sec=DURATION)
 
-        # 5) Render final mp4
         mp4 = OUT / "short.mp4"
         render_final(bg, overlays, times, audio, mp4, chat_h=860)
 
-        # 6) Upload
         hashtags = "#shorts #relatable #innerthoughts #psychology"
         description = f"{title}\n\n{hashtags}\n"
 
