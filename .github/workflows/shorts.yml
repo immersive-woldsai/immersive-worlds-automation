@@ -1,11 +1,6 @@
 name: Immersive Worlds — Shorts (3/day)
 
 on:
-  schedule:
-    - cron: "15 23 * * *"
-    - cron: "0 0 * * *"
-    - cron: "45 0 * * *"
-
   workflow_dispatch:
 
 concurrency:
@@ -34,7 +29,7 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run shorts pipeline (public upload)
+      - name: Run shorts pipeline (manual only)
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
@@ -46,5 +41,6 @@ jobs:
           SHORTS_FEMALE_SPEAKER: "p225"
           SHORTS_MALE_SPEAKER: "p226"
           SHORTS_INNER_SPEAKER: "p225"
+
         run: |
           python -m src.shorts_pipeline
